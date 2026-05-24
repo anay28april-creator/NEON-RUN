@@ -309,28 +309,44 @@ function switchLobby(role) {
   }
 }
 
+// PeerJS config with public STUN + TURN for fast ICE on all networks
+const PEER_CFG = {
+  debug: 0,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      // Open TURN relay (numb.viagenie.ca) — fallback for strict NAT
+      { urls:'turn:openrelay.metered.ca:80',   username:'openrelayproject', credential:'openrelayproject' },
+      { urls:'turn:openrelay.metered.ca:443',  username:'openrelayproject', credential:'openrelayproject' },
+      { urls:'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject' }
+    ],
+    iceCandidatePoolSize: 10
+  }
+};
+
 function initPeer(role) {
   if(peer){ try{peer.destroy();}catch(e){} peer=null; }
   document.getElementById('room-code-display').textContent='...';
-  setHostStatus('Connecting to network…','rgba(0,255,255,0.4)');
+  setHostStatus('Connecting…','rgba(0,255,255,0.4)');
 
   const code = genCode();
-  try {
-    peer = new Peer('neonrun-'+code, {debug:0});
-  } catch(e) {
-    setHostStatus('Connection error — refresh page','#f33'); return;
-  }
+  peer = new Peer('neonrun-'+code, PEER_CFG);
 
   peer.on('open', id => {
     const roomCode = id.replace('neonrun-','');
     document.getElementById('room-code-display').textContent = roomCode;
-    setHostStatus('Waiting for Player 2 to join…','rgba(0,255,255,0.55)');
-    peer.on('connection', conn => { mpConn=conn; setupConn(); });
+    setHostStatus('Waiting for Player 2…','rgba(0,255,255,0.6)');
+    peer.on('connection', conn => {
+      mpConn = conn;
+      setupConn();
+    });
   });
 
   peer.on('error', err => {
-    if(err.type==='unavailable-id') initPeer('host'); // retry with new code
-    else setHostStatus('Error: '+err.type,'#f33');
+    if(err.type==='unavailable-id'){ initPeer('host'); return; }
+    setHostStatus('Error: '+err.type+' — try refreshing','#f33');
   });
 }
 
@@ -340,26 +356,37 @@ function joinRoom() {
   mpRole='join';
   setJoinStatus('Connecting…','#ff0');
   if(peer){ try{peer.destroy();}catch(e){} peer=null; }
-  peer = new Peer({debug:0});
+
+  // Create peer then connect immediately in the open handler
+  peer = new Peer(PEER_CFG);
   peer.on('open', ()=>{
-    mpConn = peer.connect('neonrun-'+code, {reliable:false, serialization:'json'});
+    // Use reliable:true + default serialization for fastest stable connection
+    mpConn = peer.connect('neonrun-'+code, { reliable: true });
     setupConn();
   });
-  peer.on('error', e=>setJoinStatus('Could not connect — check the code','#f33'));
+  peer.on('error', e=>{
+    const msg = e.type==='peer-unavailable'
+      ? 'Code not found — check it and try again'
+      : 'Connection failed: '+e.type;
+    setJoinStatus(msg,'#f33');
+  });
 }
 
 function setupConn() {
   mpConn.on('open', ()=>{
-    mpReady=true;
+    mpReady = true;
     if(mpRole==='host'){
       setHostStatus('Player 2 connected! Starting…','#0f8');
-      setTimeout(()=>{ mpConn.send({type:'start'}); startGame(); }, 900);
+      // Send start signal then launch immediately — no artificial delay
+      mpConn.send({type:'start'});
+      startGame();
     } else {
       setJoinStatus('Connected! Starting…','#0f8');
+      // P2 starts immediately on receiving 'start' via handleMpData
     }
   });
   mpConn.on('data', handleMpData);
-  mpConn.on('close', ()=>{ mpReady=false; p2=null; });
+  mpConn.on('close', ()=>{ mpReady=false; p2=null; setJoinStatus('Disconnected','#888'); });
   mpConn.on('error', e=>console.warn('conn err',e));
 }
 
