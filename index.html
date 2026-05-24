@@ -75,6 +75,65 @@
   .pu-timer { width:40px; height:3px; border-radius:99px; background:rgba(255,255,255,0.15); overflow:hidden; }
   .pu-timer-fill { height:100%; border-radius:99px; transition:width 0.1s; }
   @keyframes puPulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+
+  /* ── Cheat Modal ── */
+  #cheat-modal {
+    display: none;
+    position: fixed; inset: 0; z-index: 9999;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.75); backdrop-filter: blur(6px);
+  }
+  #cheat-modal.open { display: flex; }
+  #cheat-box {
+    background: #0a0a14;
+    border: 1px solid rgba(0,255,0,0.4);
+    box-shadow: 0 0 40px rgba(0,255,0,0.15);
+    border-radius: 14px;
+    padding: 1.75rem 2rem;
+    width: 340px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  #cheat-box h2 {
+    font-family: 'Orbitron', monospace;
+    font-size: 0.9rem; font-weight: 900;
+    color: #0f0; letter-spacing: 0.2em;
+    margin-bottom: 0.25rem;
+  }
+  #cheat-box .cheat-sub {
+    font-size: 0.6rem; color: rgba(0,255,0,0.4);
+    letter-spacing: 0.15em; margin-bottom: 1.25rem;
+  }
+  .cheat-grid {
+    display: grid; grid-template-columns: repeat(5,1fr); gap: 7px;
+    margin-bottom: 1.25rem;
+  }
+  .cheat-lvl-btn {
+    padding: 0.5rem 0;
+    background: rgba(0,255,0,0.06);
+    border: 1px solid rgba(0,255,0,0.25);
+    border-radius: 8px;
+    color: #0f0; font-family: 'Orbitron', monospace;
+    font-size: 0.7rem; font-weight: 700;
+    cursor: pointer; transition: all 0.15s;
+    text-align: center;
+  }
+  .cheat-lvl-btn:hover {
+    background: rgba(0,255,0,0.18);
+    box-shadow: 0 0 10px rgba(0,255,0,0.3);
+  }
+  .cheat-lvl-btn.current {
+    border-color: #0f0; color: #0f0;
+    background: rgba(0,255,0,0.15);
+    box-shadow: 0 0 8px rgba(0,255,0,0.3);
+  }
+  #cheat-cancel {
+    width: 100%; padding: 0.55rem;
+    background: transparent; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; color: rgba(255,255,255,0.35);
+    font-family: 'Share Tech Mono', monospace; font-size: 0.7rem;
+    cursor: pointer; letter-spacing: 0.1em; transition: all 0.15s;
+  }
+  #cheat-cancel:hover { border-color: rgba(255,255,255,0.3); color: rgba(255,255,255,0.6); }
   .mode-btns { display:flex; gap:14px; margin-bottom:1.5rem; flex-wrap:wrap; justify-content:center; }
   .mode-btn {
     font-family:'Orbitron',monospace; font-size:0.8rem; font-weight:700; letter-spacing:0.15em;
@@ -245,6 +304,14 @@
 </div>
 </div>
 </div>
+<div id="cheat-modal">
+  <div id="cheat-box">
+    <h2>⌨ ADMIN WARP</h2>
+    <div class="cheat-sub">CTRL + 3 &nbsp;|&nbsp; SELECT LEVEL</div>
+    <div class="cheat-grid" id="cheat-grid"></div>
+    <button id="cheat-cancel" onclick="closeCheat()">CANCEL</button>
+  </div>
+</div>
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
@@ -273,6 +340,7 @@ let p2       = null;       // remote player state {x,y,vx,vy,invincible,onGround
 let p2Keys   = {};         // remote keys (received over network)
 let mpReady  = false;
 let lastSendTime = 0;
+let p2LevelReady = false; // true when P2 has also cleared all coins
 
 function genCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -392,12 +460,62 @@ function setupConn() {
 
 function handleMpData(data) {
   if(!data||!data.type) return;
-  if(data.type==='start' && mpRole==='join'){ startGame(); }
-  else if(data.type==='state'){ p2=data.player; }
-  else if(data.type==='event'){
-    if(data.sfx==='coin') sfxCoin();
-    if(data.sfx==='stomp') sfxStomp();
-    if(data.sfx==='jump') sfxJump();
+  switch(data.type){
+    case 'start':
+      if(mpRole==='join') startGame();
+      break;
+    case 'state':
+      p2 = data.player;
+      break;
+    case 'event':
+      if(data.sfx==='coin')  sfxCoin();
+      if(data.sfx==='stomp') sfxStomp();
+      if(data.sfx==='jump')  sfxJump();
+      break;
+    case 'localready':
+      // Other player cleared all their coins
+      if(mpRole==='host'){
+        p2LevelReady = true; // host will check this next frame
+      }
+      // P2 receiving from host means host is done — P2 just waits for levelchange
+      break;
+    case 'levelchange':
+      // Host advanced level — P2 follows
+      if(state){
+        const s = initLevel(data.level);
+        s.score = data.score;
+        s.lives = state.lives;
+        state = s;
+        p2LevelReady = false;
+        updateHUD();
+        sfxLevelUp();
+        setTimeout(()=>startMusic('normal'),300);
+      }
+      break;
+    case 'boss':
+      // Host spawned boss — P2 spawns too
+      if(state) spawnBoss();
+      break;
+    case 'victory':
+      showVictory();
+      break;
+    case 'gameover':
+      gameOver();
+      break;
+    case 'bossupdate':
+      // Sync boss HP and rage state from host to P2
+      if(state&&state.boss){
+        state.boss.hp    = data.hp;
+        state.boss.rage  = data.rage;
+        state.boss.x     = data.x;
+        state.boss.y     = data.y;
+        state.boss.flash = data.flash;
+        if(data.dead && !state.boss.dead){
+          state.boss.dead = true;
+          state.boss.deathTimer = 200;
+        }
+      }
+      break;
   }
 }
 
@@ -410,10 +528,23 @@ function sendMpState() {
   if(now - lastSendTime < 33) return; // ~30hz
   lastSendTime = now;
   const p = state.player;
+  // Always send player position
   mpConn.send({
     type:'state',
     player:{x:p.x,y:p.y,vx:p.vx,vy:p.vy,w:p.w,h:p.h,invincible:p.invincible,trail:[...p.trail]}
   });
+  // Host also syncs boss state so P2 sees correct HP/position
+  if(mpRole==='host' && state.boss && !state.boss.dead){
+    mpConn.send({
+      type:'bossupdate',
+      hp:state.boss.hp, rage:state.boss.rage,
+      x:state.boss.x,  y:state.boss.y,
+      flash:state.boss.flash, dead:false
+    });
+  }
+  if(mpRole==='host' && state.boss && state.boss.dead){
+    mpConn.send({type:'bossupdate', hp:0, rage:true, x:state.boss.x, y:state.boss.y, flash:0, dead:true});
+  }
 }
 
 function sendMpEvent(sfx) {
@@ -764,6 +895,7 @@ function initLevel(level, freshStart) {
     score, lives,
     platforms, coins, enemies, powerups,
     boss: null, bossPhase: false,
+    _localDone: false,
     activePowerups: [], // { typeId, remaining, total }
     player: {x:60,y:H-80,w:18,h:24,vx:0,vy:0,onGround:false,jumpsLeft:2,trail:[],invincible:0,dead:false},
     particles: [],
@@ -789,6 +921,8 @@ function spawnBoss() {
   updateBossHUD();
   sfxLevelUp();
   setTimeout(()=>startMusic('boss'), 600);
+  // Tell P2 to spawn boss too
+  if(mpReady&&mpConn) mpConn.send({type:'boss'});
 }
 
 function updateBossHUD() {
@@ -1000,7 +1134,7 @@ function update() {
     }
   });
 
-  if(p.y>H+40){loseLife();return;}
+  if(p.y>H+40){ loseLife(); return; }
 
   // Coins
   state.coins.forEach(c=>{
@@ -1065,20 +1199,50 @@ function update() {
   state.particles.forEach(pt=>{pt.x+=pt.vx;pt.y+=pt.vy;pt.vy+=0.1;pt.life-=0.04;});
   state.particles=state.particles.filter(pt=>pt.life>0);
 
+  const allCoins = state.coins.length>0 && state.coins.every(co=>co.collected);
+
   if(state.level===10){
-    if(state.coins.length>0&&state.coins.every(c=>c.collected)&&!state.bossPhase) spawnBoss();
+    if(allCoins && !state.bossPhase){
+      if(gameMode===1){
+        spawnBoss();
+      } else if(mpRole==='host'){
+        // In 2P: both must clear coins before boss spawns
+        if(!state._localDone){ state._localDone=true; if(mpReady&&mpConn) mpConn.send({type:'localready'}); }
+        if(state._localDone && p2LevelReady){ p2LevelReady=false; state._localDone=false; spawnBoss(); }
+      }
+      // P2: just wait — host will send 'boss' when both ready
+    }
     if(state.bossPhase) updateBoss();
   } else {
-    if(state.coins.length>0&&state.coins.every(c=>c.collected)){
-      state.score+=100*state.level; sfxLevelUp();
-      const nxt=state.level+1;
-      state=initLevel(nxt); updateHUD();
-      setTimeout(()=>startMusic('normal'),300);
+    if(allCoins){
+      if(gameMode===1){
+        // Solo: advance immediately
+        state.score+=100*state.level; sfxLevelUp();
+        const nxt=state.level+1;
+        state=initLevel(nxt); updateHUD();
+        setTimeout(()=>startMusic('normal'),300);
+      } else if(mpRole==='host'){
+        // 2P host: wait for BOTH players to clear coins
+        if(!state._localDone){ state._localDone=true; if(mpReady&&mpConn) mpConn.send({type:'localready'}); }
+        if(state._localDone && p2LevelReady){
+          p2LevelReady=false; state._localDone=false;
+          state.score+=100*state.level; sfxLevelUp();
+          const nxt=state.level+1;
+          state=initLevel(nxt); updateHUD();
+          setTimeout(()=>startMusic('normal'),300);
+          if(mpReady&&mpConn) mpConn.send({type:'levelchange', level:nxt, score:state.score});
+        }
+      }
+      // P2 in 2P: just signal host and wait for 'levelchange'
+      else if(mpRole==='join'){
+        if(!state._localDone){ state._localDone=true; if(mpReady&&mpConn) mpConn.send({type:'localready'}); }
+      }
     }
   }
 }
 
 function loseLife() {
+  if(!state || !animId) return; // already game over
   sfxHit();
   const p=state.player;
   spawnParticles(p.x+p.w/2,p.y+p.h/2,'#ff3e6c',16);
@@ -1087,26 +1251,38 @@ function loseLife() {
   p.x=60;p.y=H-80;p.vx=0;p.vy=0;p.invincible=120;p.trail=[];
 }
 
+function showOverlay(html) {
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = html;
+  ov.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;position:absolute;inset:0;background:rgba(5,5,15,0.88);backdrop-filter:blur(4px);';
+}
+
 function gameOver() {
-  cancelAnimationFrame(animId); stopMusic(); sfxHit();
+  if(mpReady&&mpConn) mpConn.send({type:'gameover'});
+  cancelAnimationFrame(animId); animId=null; stopMusic(); sfxHit();
   document.getElementById('boss-hud').style.display='none';
-  const ov=document.getElementById('overlay');
-  ov.innerHTML=`<h1 style="color:#ff3e6c;text-shadow:0 0 20px #ff3e6c;">GAME OVER</h1>
-    <div style="font-family:'Orbitron',monospace;font-size:1rem;color:#ff3e6c;margin-bottom:1rem;letter-spacing:0.1em;">SCORE: ${state.score}</div>
-    <div class="tagline" style="margin-bottom:2rem;">LEVEL ${state.level} REACHED</div>
-    <button class="start-btn" onclick="startGame()" style="border-color:#ff3e6c;color:#ff3e6c;">TRY AGAIN</button>`;
-  ov.style.display='flex';
+  document.getElementById('powerup-bar').innerHTML='';
+  const score=state?state.score:0, level=state?state.level:1;
+  showOverlay(`
+    <h1 style="color:#ff3e6c;text-shadow:0 0 20px #ff3e6c;">GAME OVER</h1>
+    <div style="font-family:'Orbitron',monospace;font-size:1rem;color:#ff3e6c;margin-bottom:1rem;letter-spacing:0.1em;">SCORE: ${score}</div>
+    <div class="tagline" style="margin-bottom:2rem;">LEVEL ${level} REACHED</div>
+    <button class="start-btn" onclick="startGame()" style="border-color:#ff3e6c;color:#ff3e6c;">TRY AGAIN</button>
+  `);
 }
 
 function showVictory() {
-  cancelAnimationFrame(animId); stopMusic(); sfxVictory();
+  if(mpReady&&mpConn) mpConn.send({type:'victory'});
+  cancelAnimationFrame(animId); animId=null; stopMusic(); sfxVictory();
   document.getElementById('boss-hud').style.display='none';
-  const ov=document.getElementById('overlay');
-  ov.innerHTML=`<h1 style="color:#ffd700;text-shadow:0 0 20px #ffd700;font-size:2.4rem;">YOU WIN!</h1>
+  document.getElementById('powerup-bar').innerHTML='';
+  const score=state?state.score:0;
+  showOverlay(`
+    <h1 style="color:#ffd700;text-shadow:0 0 20px #ffd700;font-size:2.4rem;">YOU WIN!</h1>
     <div class="tagline" style="color:rgba(255,215,0,0.7);margin-bottom:0.75rem;">THE OVERLORD IS DEFEATED</div>
-    <div style="font-family:'Orbitron',monospace;font-size:1.1rem;color:#fff;margin-bottom:2.5rem;letter-spacing:0.1em;">FINAL SCORE: ${state.score}</div>
-    <button class="start-btn" onclick="startGame()" style="border-color:#ffd700;color:#ffd700;">PLAY AGAIN</button>`;
-  ov.style.display='flex';
+    <div style="font-family:'Orbitron',monospace;font-size:1.1rem;color:#fff;margin-bottom:2.5rem;letter-spacing:0.1em;">FINAL SCORE: ${score}</div>
+    <button class="start-btn" onclick="startGame()" style="border-color:#ffd700;color:#ffd700;">PLAY AGAIN</button>
+  `);
 }
 
 function startGame() {
@@ -1281,6 +1457,16 @@ function drawParticles() {
 }
 
 function drawLevelBanner() {
+  // 2P waiting banner — show when this player cleared coins but waiting on partner
+  if(gameMode===2 && state._localDone && !state.bossPhase && state.coins.every(co=>co.collected)){
+    const gc = state.glowColor||'#0ff';
+    ctx.globalAlpha = 0.85;
+    ctx.textAlign='center';
+    ctx.font='900 0.9rem Orbitron,monospace';
+    ctx.fillStyle=gc; ctx.shadowColor=gc; ctx.shadowBlur=14;
+    ctx.fillText('WAITING FOR OTHER PLAYER…', W/2, 30);
+    ctx.shadowBlur=0; ctx.globalAlpha=1; ctx.textAlign='left';
+  }
   if(state.tick>=90)return;
   const a=state.tick<60?1:1-(state.tick-60)/30, gc=state.glowColor||'#0ff';
   ctx.globalAlpha=a; ctx.textAlign='center';
@@ -1397,6 +1583,65 @@ function showDpad() {
   const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
   if(isMobile) document.getElementById('dpad').classList.add('visible');
 }
+
+// ─── CHEAT CODE ──────────────────────────────────────────────
+let ctrl3Held = false;
+
+function openCheat() {
+  // Only works if a game is running or on start screen
+  const grid = document.getElementById('cheat-grid');
+  grid.innerHTML = '';
+  const currentLvl = state ? state.level : 0;
+  for(let i = 1; i <= 10; i++){
+    const def = LEVEL_DEFS[i-1];
+    const btn = document.createElement('button');
+    btn.className = 'cheat-lvl-btn' + (i===currentLvl?' current':'');
+    btn.innerHTML = i + '<br><span style="font-size:0.45rem;opacity:0.6;letter-spacing:0.05em;">' + (def?def.name.split(' ')[0]:'???') + '</span>';
+    btn.onclick = () => warpToLevel(i);
+    grid.appendChild(btn);
+  }
+  document.getElementById('cheat-modal').classList.add('open');
+}
+
+function closeCheat() {
+  document.getElementById('cheat-modal').classList.remove('open');
+}
+
+function warpToLevel(lvl) {
+  closeCheat();
+  // If game isn't running, start it first
+  if(!state || !animId){
+    initAudio();
+    if(AC&&AC.state==='suspended') AC.resume();
+    document.getElementById('overlay').style.display='none';
+    document.getElementById('boss-hud').style.display='none';
+    if(animId){ cancelAnimationFrame(animId); animId=null; }
+  }
+  // Preserve score and lives, warp level
+  const prevScore = state ? state.score : 0;
+  const prevLives = state ? state.lives : 3;
+  p2LevelReady = false;
+  state = initLevel(lvl, false);
+  state.score = prevScore;
+  state.lives = prevLives;
+  updateHUD();
+  stopMusic();
+  if(lvl===10 && state.bossPhase) setTimeout(()=>startMusic('boss'),300);
+  else setTimeout(()=>startMusic('normal'),300);
+  showDpad();
+  if(!animId) loop();
+  // Notify P2 in multiplayer
+  if(mpReady&&mpConn) mpConn.send({type:'levelchange', level:lvl, score:prevScore});
+}
+
+window.addEventListener('keydown', e => {
+  if(e.key==='3' && (e.ctrlKey||e.metaKey)){
+    e.preventDefault();
+    openCheat();
+  }
+  // Close on Escape
+  if(e.key==='Escape') closeCheat();
+});
 
 initStars();
 selectMode(1); // default to 1 player
