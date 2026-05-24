@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NEON RUN</title>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -62,13 +63,124 @@
     cursor:pointer; text-transform:uppercase; transition:all 0.2s; box-shadow:0 0 12px rgba(0,255,255,0.2);
   }
   .start-btn:hover { background:rgba(0,255,255,0.1); box-shadow:0 0 24px rgba(0,255,255,0.4); }
+  #powerup-bar {
+    display:flex; gap:8px; align-items:center;
+    width:800px; padding:0 0.25rem 0.2rem; min-height:28px;
+  }
+  .pu-chip {
+    font-family:'Orbitron',monospace; font-size:0.55rem; letter-spacing:0.08em;
+    padding:3px 8px; border-radius:99px; border:1px solid; display:flex; align-items:center; gap:5px;
+    animation: puPulse 1s infinite;
+  }
+  .pu-timer { width:40px; height:3px; border-radius:99px; background:rgba(255,255,255,0.15); overflow:hidden; }
+  .pu-timer-fill { height:100%; border-radius:99px; transition:width 0.1s; }
+  @keyframes puPulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+  .mode-btns { display:flex; gap:14px; margin-bottom:1.5rem; flex-wrap:wrap; justify-content:center; }
+  .mode-btn {
+    font-family:'Orbitron',monospace; font-size:0.8rem; font-weight:700; letter-spacing:0.15em;
+    padding:0.7rem 1.6rem; background:transparent; border:1px solid #0ff; color:#0ff;
+    cursor:pointer; text-transform:uppercase; transition:all 0.2s;
+  }
+  .mode-btn:hover { background:rgba(0,255,255,0.1); }
+  .mode-btn.active { background:rgba(0,255,255,0.18); box-shadow:0 0 16px rgba(0,255,255,0.4); }
+  #lobby-area { text-align:center; margin-bottom:1.2rem; }
+  #lobby-area input {
+    font-family:'Orbitron',monospace; font-size:1.4rem; font-weight:900; letter-spacing:0.25em;
+    background:transparent; border:none; border-bottom:2px solid #0ff; color:#fff;
+    text-align:center; width:120px; outline:none; text-transform:uppercase; padding:0.2rem 0;
+  }
+  #lobby-area input::placeholder { color:rgba(0,255,255,0.25); }
+  .lobby-label { font-size:0.6rem; color:rgba(0,255,255,0.5); letter-spacing:0.2em; text-transform:uppercase; margin-bottom:0.4rem; }
+  #lobby-status { font-size:0.68rem; min-height:1.2rem; letter-spacing:0.1em; margin-top:0.5rem; }
+  #p2-hud { font-family:'Orbitron',monospace; font-size:0.75rem; color:#f0f; letter-spacing:0.1em; }
+
+  /* ── Mobile scaling ── */
+  #game-root {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+  }
+  #scale-wrap {
+    transform-origin: top center;
+  }
+  #hud { width: 800px; }
+  #boss-hud { width: 800px; }
+
+  /* ── D-pad ── */
+  #dpad {
+    display: none;
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 12px 16px;
+    justify-content: space-between;
+    align-items: flex-end;
+    pointer-events: none;
+    z-index: 10;
+  }
+  #dpad.visible { display: flex; }
+  .dpad-group { display: flex; gap: 8px; pointer-events: all; }
+  .dpad-btn {
+    width: 62px; height: 62px;
+    background: rgba(0,255,255,0.08);
+    border: 1.5px solid rgba(0,255,255,0.35);
+    border-radius: 14px;
+    color: #0ff;
+    font-size: 1.4rem;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    transition: background 0.1s;
+    box-shadow: 0 0 10px rgba(0,255,255,0.1);
+  }
+  .dpad-btn:active, .dpad-btn.pressed {
+    background: rgba(0,255,255,0.22);
+    box-shadow: 0 0 18px rgba(0,255,255,0.3);
+  }
+  .dpad-jump {
+    width: 72px; height: 72px;
+    background: rgba(0,255,255,0.1);
+    border-color: rgba(0,255,255,0.5);
+    border-radius: 50%;
+    font-size: 1.6rem;
+  }
+
+  /* portrait nudge */
+  #portrait-msg {
+    display: none;
+    position: fixed; inset: 0; z-index: 999;
+    background: #05050f;
+    flex-direction: column; align-items: center; justify-content: center;
+    font-family: 'Orbitron', monospace; color: #0ff; text-align: center; gap: 1rem;
+  }
+  #portrait-msg.show { display: flex; }
+  #portrait-msg .icon { font-size: 3rem; animation: spin 2s linear infinite; }
+  @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  #portrait-msg p { font-size: 0.75rem; letter-spacing: 0.15em; color: rgba(0,255,255,0.6); }
+
+  @media (hover: none) {
+    /* touch device — show dpad when game running */
+    .start-btn { padding: 1rem 2rem; font-size: 0.9rem; }
+  }
 </style>
 </head>
 <body>
+<div id="portrait-msg">
+  <div class="icon">📱</div>
+  <div style="font-size:1.2rem;font-weight:900;letter-spacing:0.15em;">ROTATE DEVICE</div>
+  <p>NEON RUN plays best in landscape</p>
+</div>
+<div id="game-root">
+<div id="scale-wrap">
 <div id="hud">
   <div class="hud-item">SCORE<br><span class="hud-val" id="hud-score">0</span></div>
   <div class="hud-item" style="text-align:center;">LEVEL<br><span class="hud-val" id="hud-level">1</span></div>
   <div class="hud-item" style="text-align:right;">LIVES<br><span class="hud-val" id="hud-lives">♦ ♦ ♦</span></div>
+  <div class="hud-item" id="p2-hud-item" style="display:none;text-align:right;color:#f0f;">P2<br><span class="hud-val" id="hud-p2-status" style="color:#f0f;">⬡</span></div>
 </div>
 <div id="boss-hud">
   <div id="boss-hud-inner">
@@ -77,19 +189,61 @@
     <span id="boss-hp-text">10/10</span>
   </div>
 </div>
+<div id="powerup-bar"></div>
 <div id="canvas-wrap">
   <canvas id="c" width="800" height="440"></canvas>
   <div id="overlay">
     <h1>NEON RUN</h1>
     <div class="tagline">SURVIVE THE GRID</div>
-    <div class="instructions">
-      ARROW KEYS or WASD — move &amp; jump<br>
-      Collect orbs &nbsp;◈&nbsp; avoid enemies &nbsp;▲<br>
-      Double jump &nbsp;|&nbsp; Stomp enemies from above<br>
-      Level 10: defeat the BOSS — jump on it 10 times!
+    <div class="instructions" id="instructions"></div>
+    <script>
+      (function(){
+        const mobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+        document.getElementById('instructions').innerHTML = mobile
+          ? 'TAP ◀ ▶ to move &amp; ▲ to jump &nbsp;|&nbsp; Stomp enemies<br>Collect all orbs to advance &nbsp;|&nbsp; Level 10: BOSS fight!'
+          : 'ARROW KEYS or WASD — move &amp; jump &nbsp;|&nbsp; Stomp enemies<br>Collect all orbs to advance &nbsp;|&nbsp; Level 10: BOSS fight!';
+      })();
+    </script>
+    <div class="mode-btns">
+      <button class="mode-btn active" id="btn-1p" onclick="selectMode(1)">1 PLAYER</button>
+      <button class="mode-btn"        id="btn-2p" onclick="selectMode(2)">2 PLAYER</button>
     </div>
-    <button class="start-btn" onclick="startGame()">INSERT COIN</button>
+    <div id="lobby-area" style="display:none;">
+      <!-- Host or Join toggle -->
+      <div class="mode-btns" id="hj-toggle">
+        <button class="mode-btn active" id="btn-host" onclick="switchLobby('host')">HOST GAME</button>
+        <button class="mode-btn"        id="btn-join" onclick="switchLobby('join')">JOIN GAME</button>
+      </div>
+
+      <div id="host-panel" style="display:none;">
+        <div class="lobby-label">Your room code — share this with your friend</div>
+        <div style="font-family:'Orbitron',monospace;font-size:2.2rem;font-weight:900;color:#0ff;letter-spacing:0.35em;margin:0.5rem 0;" id="room-code-display">----</div>
+        <div id="host-status" style="font-size:0.68rem;letter-spacing:0.1em;min-height:1.2rem;color:rgba(0,255,255,0.5);">Generating code…</div>
+      </div>
+
+      <div id="join-panel" style="display:none;">
+        <div class="lobby-label">Enter the 4-letter code from your friend</div>
+        <input id="code-input" maxlength="4" placeholder="XXXX"
+               oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"
+               onkeydown="if(event.key==='Enter')joinRoom()">
+        <br><br>
+        <button class="start-btn" onclick="joinRoom()" style="font-size:0.75rem;padding:0.6rem 1.8rem;">CONNECT</button>
+        <div id="join-status" style="font-size:0.68rem;letter-spacing:0.1em;min-height:1.2rem;margin-top:0.5rem;color:rgba(255,0,255,0.6);"></div>
+      </div>
+    </div>
+    <button class="start-btn" id="insert-coin-btn" onclick="startGame()">INSERT COIN</button>
   </div>
+  <div id="dpad">
+    <div class="dpad-group">
+      <div class="dpad-btn" id="btn-left" ontouchstart="dpadDown('left')" ontouchend="dpadUp('left')" onmousedown="dpadDown('left')" onmouseup="dpadUp('left')">◀</div>
+      <div class="dpad-btn" id="btn-right" ontouchstart="dpadDown('right')" ontouchend="dpadUp('right')" onmousedown="dpadDown('right')" onmouseup="dpadUp('right')">▶</div>
+    </div>
+    <div class="dpad-group">
+      <div class="dpad-btn dpad-jump" id="btn-jump" ontouchstart="dpadDown('jump')" ontouchend="dpadUp('jump')" onmousedown="dpadDown('jump')" onmouseup="dpadUp('jump')">▲</div>
+    </div>
+  </div>
+</div>
+</div>
 </div>
 <script>
 const canvas = document.getElementById('c');
@@ -97,6 +251,148 @@ const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const GRAVITY = 0.55, PLAYER_SPEED = 4.2, JUMP_FORCE = -12.5, BOSS_MAX_HP = 10;
 let state, keys = {}, animId, bgStars;
+
+// ─── POWERUP DEFINITIONS ──────────────────────────────────────
+const POWERUP_TYPES = [
+  { id:'speed',    label:'SPEED',    icon:'⚡', color:'#ff0',  border:'#cc0',  dur:300, desc:'Speed Boost' },
+  { id:'shield',   label:'SHIELD',   icon:'🛡', color:'#0ff',  border:'#0aa',  dur:360, desc:'Shield' },
+  { id:'triple',   label:'3-JUMP',   icon:'△',  color:'#f0f',  border:'#a0a',  dur:400, desc:'Triple Jump' },
+  { id:'multi',    label:'2× SCORE', icon:'★',  color:'#ffa',  border:'#aa8',  dur:350, desc:'Score ×2' },
+  { id:'shrink',   label:'SHRINK',   icon:'↘',  color:'#8ff',  border:'#088',  dur:280, desc:'Shrink Enemies' },
+  { id:'magnet',   label:'MAGNET',   icon:'◉',  color:'#f8a',  border:'#a44',  dur:320, desc:'Coin Magnet' },
+];
+
+// ═══════════════════════════════════════════════════════════════
+// MULTIPLAYER STATE
+// ═══════════════════════════════════════════════════════════════
+let gameMode = 1;          // 1 or 2
+let mpRole   = null;       // 'host' or 'join'
+let peer     = null;
+let mpConn   = null;
+let p2       = null;       // remote player state {x,y,vx,vy,invincible,onGround,jumpsLeft,trail,w,h}
+let p2Keys   = {};         // remote keys (received over network)
+let mpReady  = false;
+let lastSendTime = 0;
+
+function genCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({length:4}, ()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+}
+
+function selectMode(m) {
+  gameMode = m;
+  document.getElementById('btn-1p').classList.toggle('active', m===1);
+  document.getElementById('btn-2p').classList.toggle('active', m===2);
+  const lobby = document.getElementById('lobby-area');
+  const coinBtn = document.getElementById('insert-coin-btn');
+  if(m===1){
+    lobby.style.display='none';
+    coinBtn.style.display='';
+  } else {
+    lobby.style.display='block';
+    coinBtn.style.display='none';
+    switchLobby('host'); // default to host view
+  }
+}
+
+function switchLobby(role) {
+  mpRole = role;
+  document.getElementById('btn-host').classList.toggle('active', role==='host');
+  document.getElementById('btn-join').classList.toggle('active', role==='join');
+  document.getElementById('host-panel').style.display = role==='host' ? 'block' : 'none';
+  document.getElementById('join-panel').style.display = role==='join' ? 'block' : 'none';
+  if(role==='host') initPeer('host');
+  else {
+    // Stop any existing peer so host doesn't hold a dead slot
+    if(peer){ try{peer.destroy();}catch(e){} peer=null; }
+    setHostStatus('','');
+  }
+}
+
+function initPeer(role) {
+  if(peer){ try{peer.destroy();}catch(e){} peer=null; }
+  document.getElementById('room-code-display').textContent='...';
+  setHostStatus('Connecting to network…','rgba(0,255,255,0.4)');
+
+  const code = genCode();
+  try {
+    peer = new Peer('neonrun-'+code, {debug:0});
+  } catch(e) {
+    setHostStatus('Connection error — refresh page','#f33'); return;
+  }
+
+  peer.on('open', id => {
+    const roomCode = id.replace('neonrun-','');
+    document.getElementById('room-code-display').textContent = roomCode;
+    setHostStatus('Waiting for Player 2 to join…','rgba(0,255,255,0.55)');
+    peer.on('connection', conn => { mpConn=conn; setupConn(); });
+  });
+
+  peer.on('error', err => {
+    if(err.type==='unavailable-id') initPeer('host'); // retry with new code
+    else setHostStatus('Error: '+err.type,'#f33');
+  });
+}
+
+function joinRoom() {
+  const code = document.getElementById('code-input').value.trim().toUpperCase();
+  if(code.length!==4){ setJoinStatus('Enter a 4-letter code','#f80'); return; }
+  mpRole='join';
+  setJoinStatus('Connecting…','#ff0');
+  if(peer){ try{peer.destroy();}catch(e){} peer=null; }
+  peer = new Peer({debug:0});
+  peer.on('open', ()=>{
+    mpConn = peer.connect('neonrun-'+code, {reliable:false, serialization:'json'});
+    setupConn();
+  });
+  peer.on('error', e=>setJoinStatus('Could not connect — check the code','#f33'));
+}
+
+function setupConn() {
+  mpConn.on('open', ()=>{
+    mpReady=true;
+    if(mpRole==='host'){
+      setHostStatus('Player 2 connected! Starting…','#0f8');
+      setTimeout(()=>{ mpConn.send({type:'start'}); startGame(); }, 900);
+    } else {
+      setJoinStatus('Connected! Starting…','#0f8');
+    }
+  });
+  mpConn.on('data', handleMpData);
+  mpConn.on('close', ()=>{ mpReady=false; p2=null; });
+  mpConn.on('error', e=>console.warn('conn err',e));
+}
+
+function handleMpData(data) {
+  if(!data||!data.type) return;
+  if(data.type==='start' && mpRole==='join'){ startGame(); }
+  else if(data.type==='state'){ p2=data.player; }
+  else if(data.type==='event'){
+    if(data.sfx==='coin') sfxCoin();
+    if(data.sfx==='stomp') sfxStomp();
+    if(data.sfx==='jump') sfxJump();
+  }
+}
+
+function setHostStatus(msg,color){ const el=document.getElementById('host-status'); if(el){el.textContent=msg;el.style.color=color;} }
+function setJoinStatus(msg,color){ const el=document.getElementById('join-status'); if(el){el.textContent=msg;el.style.color=color;} }
+
+function sendMpState() {
+  if(!mpReady||!mpConn||!state) return;
+  const now = performance.now();
+  if(now - lastSendTime < 33) return; // ~30hz
+  lastSendTime = now;
+  const p = state.player;
+  mpConn.send({
+    type:'state',
+    player:{x:p.x,y:p.y,vx:p.vx,vy:p.vy,w:p.w,h:p.h,invincible:p.invincible,trail:[...p.trail]}
+  });
+}
+
+function sendMpEvent(sfx) {
+  if(!mpReady||!mpConn) return;
+  mpConn.send({type:'event', sfx});
+}
 
 // ═══════════════════════════════════════════════════════════════
 // AUDIO ENGINE
@@ -188,6 +484,12 @@ function sfxVictory() {
     makeOsc('triangle',f*0.5,t+i*0.13,0.22,0.09,masterGain,0.01,0.08);
   });
 }
+function sfxPowerup() {
+  if(!AC)return; const t=acNow();
+  [523,659,784,1046,1318].forEach((f,i)=>makeOsc('sine',f,t+i*0.06,0.12,0.15,masterGain,0.005,0.05));
+  makeSlide('triangle',200,800,t,0.25,0.07,masterGain);
+}
+
 function sfxBossDeath() {
   if(!AC)return;
   const t=acNow();
@@ -402,7 +704,7 @@ const LEVEL_DEFS = [
 // ═══════════════════════════════════════════════════════════════
 function getLevelDef(level) { return LEVEL_DEFS[(level-1) % LEVEL_DEFS.length]; }
 
-function initLevel(level) {
+function initLevel(level, freshStart) {
   const def = getLevelDef(level);
   const mult = 1 + Math.floor((level-1)/LEVEL_DEFS.length)*0.4;
 
@@ -415,17 +717,30 @@ function initLevel(level) {
     return en;
   });
 
+  // freshStart=true resets lives & score (used by startGame)
+  // otherwise carry over from existing state
+  const score = freshStart ? 0 : (state ? state.score : 0);
+  const lives = freshStart ? 3 : (state ? state.lives : 3);
+
+  // Spawn 2-3 powerups on random non-ground platforms
+  const pwPlats = platforms.filter((_,i)=>i>0);
+  const pwCount = 2 + (level > 5 ? 1 : 0);
+  const powerups = [];
+  for(let i=0;i<pwCount;i++){
+    const pl = pwPlats[Math.floor(Math.random()*pwPlats.length)];
+    const type = POWERUP_TYPES[Math.floor(Math.random()*POWERUP_TYPES.length)];
+    powerups.push({ x:pl.x+pl.w/2, y:pl.y-18, type, collected:false, pulse:Math.random()*Math.PI*2 });
+  }
+
   return {
     level, name:def.name, glowColor:def.glowColor, bgTint:def.bgTint,
-    score: state?state.score:0,
-    lives: state?state.lives:3,
-    platforms, coins, enemies,
+    score, lives,
+    platforms, coins, enemies, powerups,
     boss: null, bossPhase: false,
+    activePowerups: [], // { typeId, remaining, total }
     player: {x:60,y:H-80,w:18,h:24,vx:0,vy:0,onGround:false,jumpsLeft:2,trail:[],invincible:0,dead:false},
     particles: [],
-    tick: 0,
-    _lastScore: state?state.score:0,
-    _projCount: 0
+    tick: 0
   };
 }
 
@@ -543,6 +858,75 @@ function spawnParticles(x,y,color,n) {
 
 function collides(a,b) { return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y; }
 
+function hasPowerup(id){ return state.activePowerups && state.activePowerups.some(a=>a.typeId===id); }
+
+function activatePowerup(type) {
+  // Remove existing of same type and add fresh
+  state.activePowerups = state.activePowerups.filter(a=>a.typeId!==type.id);
+  state.activePowerups.push({ typeId:type.id, remaining:type.dur, total:type.dur });
+  sfxPowerup();
+  spawnParticles(state.player.x+9, state.player.y, type.color, 14);
+  updatePowerupBar();
+}
+
+function tickPowerups() {
+  if(!state.activePowerups) return;
+  state.activePowerups.forEach(a=>a.remaining--);
+  state.activePowerups = state.activePowerups.filter(a=>a.remaining>0);
+  updatePowerupBar();
+}
+
+function updatePowerupBar() {
+  const bar = document.getElementById('powerup-bar');
+  if(!bar) return;
+  bar.innerHTML = '';
+  if(!state.activePowerups) return;
+  state.activePowerups.forEach(a=>{
+    const def = POWERUP_TYPES.find(t=>t.id===a.typeId);
+    if(!def) return;
+    const pct = (a.remaining/a.total*100).toFixed(1);
+    bar.innerHTML += '<div class="pu-chip" style="color:'+def.color+';border-color:'+def.border+';background:rgba(0,0,0,0.4);">'
+      +'<span>'+def.icon+'</span><span>'+def.label+'</span>'
+      +'<div class="pu-timer"><div class="pu-timer-fill" style="width:'+pct+'%;background:'+def.color+';"></div></div>'
+      +'</div>';
+  });
+}
+
+function drawPowerups() {
+  if(!state.powerups) return;
+  state.powerups.forEach(pw=>{
+    if(pw.collected) return;
+    pw.pulse += 0.07;
+    const def = pw.type;
+    const bob = Math.sin(pw.pulse)*3;
+    const y = pw.y + bob;
+    const x = pw.x;
+
+    // Glow ring
+    ctx.shadowColor = def.color; ctx.shadowBlur = 16 + Math.sin(pw.pulse)*4;
+    ctx.strokeStyle = def.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI*2); ctx.stroke();
+
+    // Fill
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI*2); ctx.fill();
+
+    // Icon
+    ctx.shadowBlur = 8; ctx.fillStyle = def.color;
+    ctx.font = '13px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(def.icon, x, y);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+
+    // Label below
+    ctx.shadowBlur = 0; ctx.globalAlpha = 0.7;
+    ctx.font = '500 0.42rem Orbitron,monospace'; ctx.fillStyle = def.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(def.label, x, y+20);
+    ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  });
+}
+
 function updateHUD() {
   document.getElementById('hud-score').textContent=state.score;
   document.getElementById('hud-level').textContent=state.level;
@@ -558,14 +942,16 @@ function update() {
   // Jump SFX
   const wantJump=keys['ArrowUp']||keys['KeyW']||keys['Space'];
   if(wantJump&&!keys['_jumpHeld']&&p.jumpsLeft>0){
-    if(p.jumpsLeft===2)sfxJump(); else sfxDblJump();
+    if(p.jumpsLeft===2){sfxJump();sendMpEvent('jump');} else sfxDblJump();
   }
 
   p.vx=0;
-  if(keys['ArrowLeft']||keys['KeyA'])p.vx=-PLAYER_SPEED;
-  if(keys['ArrowRight']||keys['KeyD'])p.vx=PLAYER_SPEED;
+  const spd = hasPowerup('speed') ? PLAYER_SPEED*1.75 : PLAYER_SPEED;
+  if(keys['ArrowLeft']||keys['KeyA'])p.vx=-spd;
+  if(keys['ArrowRight']||keys['KeyD'])p.vx=spd;
+  const maxJumps = hasPowerup('triple') ? 3 : 2;
   if(wantJump&&p.jumpsLeft>0&&!keys['_jumpHeld']){
-    p.vy=JUMP_FORCE*(p.jumpsLeft===2?1:0.85);
+    p.vy=JUMP_FORCE*(p.jumpsLeft===maxJumps?1:0.85);
     p.jumpsLeft--;keys['_jumpHeld']=true;
     spawnParticles(p.x+p.w/2,p.y+p.h,'#0ff',5);
   }
@@ -582,7 +968,7 @@ function update() {
   p.onGround=false;
   state.platforms.forEach(pl=>{
     if(p.x+p.w>pl.x&&p.x<pl.x+pl.w){
-      if(p.vy>=0&&p.y+p.h>pl.y&&p.y+p.h<pl.y+pl.h+14){p.y=pl.y-p.h;p.vy=0;p.onGround=true;p.jumpsLeft=2;}
+      if(p.vy>=0&&p.y+p.h>pl.y&&p.y+p.h<pl.y+pl.h+14){p.y=pl.y-p.h;p.vy=0;p.onGround=true;p.jumpsLeft=hasPowerup("triple")?3:2;}
       else if(p.vy<0&&p.y<pl.y+pl.h&&p.y>pl.y){p.y=pl.y+pl.h;p.vy=0;}
     }
   });
@@ -592,24 +978,59 @@ function update() {
   // Coins
   state.coins.forEach(c=>{
     if(!c.collected&&Math.hypot(p.x+p.w/2-c.x,p.y+p.h/2-c.y)<c.r+12){
-      c.collected=true; state.score+=10;
-      spawnParticles(c.x,c.y,'#ff0',6); updateHUD(); sfxCoin();
+      c.collected=true;
+      const scoreGain = hasPowerup('multi') ? 20 : 10;
+      state.score+=scoreGain;
+      spawnParticles(c.x,c.y,'#ff0',6); updateHUD(); sfxCoin(); sendMpEvent('coin');
     }
     c.pulse+=0.08;
   });
+
+  // Powerup collection
+  if(state.powerups) {
+    const magnet = hasPowerup('magnet');
+    state.powerups.forEach(pw=>{
+      if(pw.collected) return;
+      const dist = Math.hypot(p.x+p.w/2-pw.x, p.y+p.h/2-pw.y);
+      // Magnet pulls coins — pull powerups too if close
+      if(magnet && dist < 80) {
+        const dx=p.x+p.w/2-pw.x, dy=p.y+p.h/2-pw.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+        pw.x += dx/d*3; pw.y += dy/d*3;
+      }
+      if(dist < 18) {
+        pw.collected = true;
+        activatePowerup(pw.type);
+      }
+    });
+  }
+
+  // Magnet pulls uncollected coins
+  if(hasPowerup('magnet')) {
+    state.coins.forEach(co=>{
+      if(co.collected) return;
+      const dx=p.x+p.w/2-co.x, dy=p.y+p.h/2-co.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+      if(d<120){ co.x+=dx/d*4; co.y+=dy/d*4; }
+    });
+  }
+
+  tickPowerups();
 
   // Enemies
   if(!state.bossPhase){
     state.enemies.forEach(en=>{
       if(en.dead)return;
-      en.x+=en.vx;
+      const shrinkMult = hasPowerup('shrink') ? 0.3 : 1;
+      en.x+=en.vx*shrinkMult;
       if(en.x<=en.minX||en.x+en.w>=en.maxX)en.vx*=-1;
       if(en.flash>0)en.flash--;
       if(p.invincible===0&&collides(p,en)){
         if(p.vy>0&&p.y+p.h<en.y+en.h/2+8){
           en.dead=true; p.vy=JUMP_FORCE*0.7; state.score+=25;
-          spawnParticles(en.x+en.w/2,en.y,'#f0f',10); updateHUD(); sfxStomp();
-        } else { loseLife(); }
+          spawnParticles(en.x+en.w/2,en.y,'#f0f',10); updateHUD(); sfxStomp(); sendMpEvent('stomp');
+        } else {
+          if(hasPowerup('shield')){ p.vy=JUMP_FORCE*0.5; p.invincible=60; spawnParticles(p.x+9,p.y,'#0ff',10); }
+          else loseLife();
+        }
       }
     });
   }
@@ -666,10 +1087,17 @@ function startGame() {
   if(AC&&AC.state==='suspended')AC.resume();
   document.getElementById('overlay').style.display='none';
   document.getElementById('boss-hud').style.display='none';
+  // Show P2 HUD if multiplayer
+  if(gameMode===2){
+    document.getElementById('p2-hud-item').style.display='';
+    document.getElementById('hud-p2-status').textContent = mpRole==='host'?'P2 ✓':'P1 ✓';
+  }
   keys={};
-  state=initLevel(1);
+  if(animId){ cancelAnimationFrame(animId); animId=null; }
+  state=null;
+  state=initLevel(1, true);
   updateHUD();
-  if(animId)cancelAnimationFrame(animId);
+  showDpad();
   startMusic('normal');
   loop();
 }
@@ -804,8 +1232,9 @@ function drawPlayer(p) {
   p.trail.forEach((t,i)=>{ctx.globalAlpha=t.life*0.35*(i/p.trail.length);ctx.fillStyle='#0ff';ctx.fillRect(t.x-4,t.y-6,8,12);});
   ctx.globalAlpha=1;
   if(p.invincible>0&&Math.floor(p.invincible/6)%2===0)return;
-  ctx.shadowColor='#0ff'; ctx.shadowBlur=18;
-  ctx.fillStyle='#0ff'; ctx.fillRect(p.x+3,p.y+8,p.w-6,p.h-8);
+  const puGlow = hasPowerup('shield')?'#0ff': hasPowerup('speed')?'#ff0': hasPowerup('triple')?'#f0f': hasPowerup('multi')?'#ffa': hasPowerup('magnet')?'#f8a':'#0ff';
+  ctx.shadowColor=puGlow; ctx.shadowBlur=18+(hasPowerup('shield')?10:0);
+  ctx.fillStyle=puGlow; ctx.fillRect(p.x+3,p.y+8,p.w-6,p.h-8);
   ctx.fillStyle='#0df'; ctx.fillRect(p.x+2,p.y,p.w-4,10);
   ctx.fillStyle='#001a2e'; ctx.fillRect(p.x+4,p.y+2,p.w-8,5);
   ctx.fillStyle='#009aa8';
@@ -835,12 +1264,40 @@ function drawLevelBanner() {
   ctx.globalAlpha=1; ctx.textAlign='left';
 }
 
+function drawP2() {
+  if(!p2 || gameMode!==2) return;
+  // Draw remote player in magenta
+  p2.trail = p2.trail || [];
+  p2.trail.forEach((t,i)=>{
+    ctx.globalAlpha=t.life*0.35*(i/Math.max(p2.trail.length,1));
+    ctx.fillStyle='#f0f';
+    ctx.fillRect(t.x-4,t.y-6,8,12);
+  });
+  ctx.globalAlpha=1;
+  if(p2.invincible>0&&Math.floor(p2.invincible/6)%2===0) return;
+  ctx.shadowColor='#f0f'; ctx.shadowBlur=18;
+  ctx.fillStyle='#f0f'; ctx.fillRect(p2.x+3,p2.y+8,p2.w-6,p2.h-8);
+  ctx.fillStyle='#c0c'; ctx.fillRect(p2.x+2,p2.y,p2.w-4,10);
+  ctx.fillStyle='#1a001a'; ctx.fillRect(p2.x+4,p2.y+2,p2.w-8,5);
+  ctx.fillStyle='#880088';
+  ctx.fillRect(p2.x+2,p2.y+p2.h-5,5,5);
+  ctx.fillRect(p2.x+p2.w-7,p2.y+p2.h-5,5,5);
+  // P2 label
+  ctx.shadowBlur=0; ctx.globalAlpha=0.7;
+  ctx.font='700 0.5rem Orbitron,monospace'; ctx.fillStyle='#f0f'; ctx.textAlign='center';
+  ctx.fillText('P2',p2.x+p2.w/2,p2.y-4);
+  ctx.textAlign='left'; ctx.globalAlpha=1;
+  ctx.shadowBlur=0;
+}
+
 function draw() {
   drawBg();
   state.platforms.forEach(drawPlatform);
   state.coins.forEach(drawCoin);
   if(!state.bossPhase)state.enemies.forEach(drawEnemy);
   drawBoss();
+  drawPowerups();
+  drawP2();
   drawPlayer(state.player);
   drawParticles();
   drawLevelBanner();
@@ -848,7 +1305,9 @@ function draw() {
 
 function loop() {
   if(!state)return;
-  update(); draw();
+  update();
+  sendMpState();
+  draw();
   animId=requestAnimationFrame(loop);
 }
 
@@ -858,7 +1317,62 @@ window.addEventListener('keydown',e=>{
 });
 window.addEventListener('keyup',e=>{keys[e.code]=false;});
 
+// ── D-PAD ──────────────────────────────────────────────────────
+const dpadMap = { left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp' };
+function dpadDown(dir) {
+  keys[dpadMap[dir]] = true;
+  document.getElementById('btn-'+dir).classList.add('pressed');
+}
+function dpadUp(dir) {
+  keys[dpadMap[dir]] = false;
+  // also clear jump-held so repeated taps work
+  if(dir==='jump') keys['_jumpHeld'] = false;
+  document.getElementById('btn-'+dir).classList.remove('pressed');
+}
+// Prevent ghost touches
+document.querySelectorAll('.dpad-btn').forEach(btn=>{
+  btn.addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
+  btn.addEventListener('touchend',  e=>e.preventDefault(),{passive:false});
+  btn.addEventListener('contextmenu',e=>e.preventDefault());
+});
+
+// ── SCALING ────────────────────────────────────────────────────
+const GAME_W = 800, GAME_H = 440; // native canvas + hud area
+function scaleGame() {
+  const wrap = document.getElementById('scale-wrap');
+  const hudH = document.getElementById('hud').offsetHeight +
+               (document.getElementById('boss-hud').offsetHeight || 0);
+  const totalH = GAME_H + hudH + 4; // 4px gap
+  const scaleX = window.innerWidth  / GAME_W;
+  const scaleY = window.innerHeight / totalH;
+  const scale  = Math.min(scaleX, scaleY, 1); // never upscale beyond native
+  wrap.style.transform = `scale(${scale})`;
+  // Also scale dpad position inside canvas-wrap
+  const canvasWrap = document.getElementById('canvas-wrap');
+  canvasWrap.style.position = 'relative';
+}
+window.addEventListener('resize', scaleGame);
+window.addEventListener('orientationchange', ()=>setTimeout(scaleGame,150));
+scaleGame();
+
+// ── PORTRAIT WARNING ───────────────────────────────────────────
+function checkOrientation() {
+  const isPortrait = window.innerHeight > window.innerWidth;
+  const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  document.getElementById('portrait-msg').classList.toggle('show', isMobile && isPortrait);
+}
+window.addEventListener('resize', checkOrientation);
+window.addEventListener('orientationchange', ()=>setTimeout(checkOrientation,150));
+checkOrientation();
+
+// ── SHOW DPAD ON TOUCH DEVICES ─────────────────────────────────
+function showDpad() {
+  const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  if(isMobile) document.getElementById('dpad').classList.add('visible');
+}
+
 initStars();
+selectMode(1); // default to 1 player
 </script>
 </body>
 </html>
