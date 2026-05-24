@@ -1,0 +1,25 @@
+{
+  "name": "help-meeeeee",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anay28april-creator/NEON-RUN.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/anay28april-creator/NEON-RUN/issues"
+  },
+  "homepage": "https://github.com/anay28april-creator/NEON-RUN#readme",
+  "devDependencies": {
+    "electron": "^42.2.0",
+    "electron-packager": "^17.1.2"
+  }
+}
