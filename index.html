@@ -531,7 +531,7 @@ function sendMpState() {
   // Always send player position
   mpConn.send({
     type:'state',
-    player:{x:p.x,y:p.y,vx:p.vx,vy:p.vy,w:p.w,h:p.h,invincible:p.invincible,trail:[...p.trail]}
+    player:{x:p.x,y:p.y,vx:p.vx,vy:p.vy,w:p.w,h:p.h,invincible:p.invincible,onGround:p.onGround,trail:[...p.trail]}
   });
   // Host also syncs boss state so P2 sees correct HP/position
   if(mpRole==='host' && state.boss && !state.boss.dead){
@@ -1432,22 +1432,24 @@ function drawBoss() {
 }
 
 function drawPlayer(p) {
-  p.trail.forEach((t,i)=>{ctx.globalAlpha=t.life*0.35*(i/p.trail.length);ctx.fillStyle='#0ff';ctx.fillRect(t.x-4,t.y-6,8,12);});
+  p.trail.forEach((t,i)=>{
+    const gc = hasPowerup('shield')?'#0ff': hasPowerup('speed')?'#ff0': hasPowerup('triple')?'#f0f':'#0ff';
+    ctx.globalAlpha=t.life*0.35*(i/p.trail.length);
+    ctx.fillStyle=gc; ctx.fillRect(t.x-4,t.y-6,8,12);
+  });
   ctx.globalAlpha=1;
   if(p.invincible>0&&Math.floor(p.invincible/6)%2===0)return;
   const puGlow = hasPowerup('shield')?'#0ff': hasPowerup('speed')?'#ff0': hasPowerup('triple')?'#f0f': hasPowerup('multi')?'#ffa': hasPowerup('magnet')?'#f8a':'#0ff';
+  const la = (keys['ArrowLeft']||keys['KeyA']||keys['ArrowRight']||keys['KeyD']) ? Math.sin(state.tick*0.3)*3 : 0;
   ctx.shadowColor=puGlow; ctx.shadowBlur=18+(hasPowerup('shield')?10:0);
   ctx.fillStyle=puGlow; ctx.fillRect(p.x+3,p.y+8,p.w-6,p.h-8);
   ctx.fillStyle='#0df'; ctx.fillRect(p.x+2,p.y,p.w-4,10);
   ctx.fillStyle='#001a2e'; ctx.fillRect(p.x+4,p.y+2,p.w-8,5);
   ctx.fillStyle='#009aa8';
-  if(keys['ArrowLeft']||keys['KeyA']||keys['ArrowRight']||keys['KeyD']){
-    const la=Math.sin(state.tick*0.3)*3;
-    ctx.fillRect(p.x+2,p.y+p.h-5,5,5+la); ctx.fillRect(p.x+p.w-7,p.y+p.h-5,5,5-la);
-  } else { ctx.fillRect(p.x+2,p.y+p.h-5,5,5); ctx.fillRect(p.x+p.w-7,p.y+p.h-5,5,5); }
+  ctx.fillRect(p.x+2,p.y+p.h-5,5,5+la);
+  ctx.fillRect(p.x+p.w-7,p.y+p.h-5,5,5-la);
   ctx.shadowBlur=0;
 }
-
 function drawParticles() {
   state.particles.forEach(pt=>{
     ctx.globalAlpha=pt.life; ctx.fillStyle=pt.color; ctx.shadowColor=pt.color; ctx.shadowBlur=6;
@@ -1457,11 +1459,9 @@ function drawParticles() {
 }
 
 function drawLevelBanner() {
-  // 2P waiting banner — show when this player cleared coins but waiting on partner
   if(gameMode===2 && state._localDone && !state.bossPhase && state.coins.every(co=>co.collected)){
     const gc = state.glowColor||'#0ff';
-    ctx.globalAlpha = 0.85;
-    ctx.textAlign='center';
+    ctx.globalAlpha = 0.85; ctx.textAlign='center';
     ctx.font='900 0.9rem Orbitron,monospace';
     ctx.fillStyle=gc; ctx.shadowColor=gc; ctx.shadowBlur=14;
     ctx.fillText('WAITING FOR OTHER PLAYER…', W/2, 30);
@@ -1479,28 +1479,25 @@ function drawLevelBanner() {
 
 function drawP2() {
   if(!p2 || gameMode!==2) return;
-  // Draw remote player in magenta
   p2.trail = p2.trail || [];
   p2.trail.forEach((t,i)=>{
     ctx.globalAlpha=t.life*0.35*(i/Math.max(p2.trail.length,1));
-    ctx.fillStyle='#f0f';
-    ctx.fillRect(t.x-4,t.y-6,8,12);
+    ctx.fillStyle='#f0f'; ctx.fillRect(t.x-4,t.y-6,8,12);
   });
   ctx.globalAlpha=1;
   if(p2.invincible>0&&Math.floor(p2.invincible/6)%2===0) return;
+  const la = (p2.vx!==0) ? Math.sin(state.tick*0.3)*3 : 0;
   ctx.shadowColor='#f0f'; ctx.shadowBlur=18;
   ctx.fillStyle='#f0f'; ctx.fillRect(p2.x+3,p2.y+8,p2.w-6,p2.h-8);
   ctx.fillStyle='#c0c'; ctx.fillRect(p2.x+2,p2.y,p2.w-4,10);
   ctx.fillStyle='#1a001a'; ctx.fillRect(p2.x+4,p2.y+2,p2.w-8,5);
   ctx.fillStyle='#880088';
-  ctx.fillRect(p2.x+2,p2.y+p2.h-5,5,5);
-  ctx.fillRect(p2.x+p2.w-7,p2.y+p2.h-5,5,5);
-  // P2 label
+  ctx.fillRect(p2.x+2,p2.y+p2.h-5,5,5+la);
+  ctx.fillRect(p2.x+p2.w-7,p2.y+p2.h-5,5,5-la);
   ctx.shadowBlur=0; ctx.globalAlpha=0.7;
   ctx.font='700 0.5rem Orbitron,monospace'; ctx.fillStyle='#f0f'; ctx.textAlign='center';
   ctx.fillText('P2',p2.x+p2.w/2,p2.y-4);
   ctx.textAlign='left'; ctx.globalAlpha=1;
-  ctx.shadowBlur=0;
 }
 
 function draw() {
@@ -1639,9 +1636,62 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     openCheat();
   }
+  // Ctrl+6 — kill boss instantly
+  if(e.key==='6' && (e.ctrlKey||e.metaKey)){
+    e.preventDefault();
+    if(state && state.boss && !state.boss.dead){
+      state.boss.hp = 0;
+      state.boss.dead = true;
+      state.boss.deathTimer = 200;
+      state.score += 500;
+      updateHUD();
+      document.getElementById('boss-hud').style.display='none';
+      for(let i=0;i<8;i++) setTimeout(()=>{
+        if(state&&state.boss) spawnParticles(
+          state.boss.x + Math.random()*state.boss.w,
+          state.boss.y + Math.random()*state.boss.h,
+          ['#f33','#f80','#ff0','#fff','#0ff'][Math.floor(Math.random()*5)], 20);
+      }, i*100);
+      adminToast('☠ BOSS OBLITERATED');
+    } else {
+      adminToast('No boss active');
+    }
+  }
+  // Ctrl+7 — full lives restore
+  if(e.key==='7' && (e.ctrlKey||e.metaKey)){
+    e.preventDefault();
+    if(state){
+      state.lives = 10;
+      updateHUD();
+      adminToast('♦ LIVES MAXED TO 10');
+      spawnParticles(state.player.x+9, state.player.y, '#0f0', 16);
+    }
+  }
   // Close on Escape
   if(e.key==='Escape') closeCheat();
 });
+
+// ── Admin toast notification ─────────────────────────────────
+function adminToast(msg) {
+  let el = document.getElementById('admin-toast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'admin-toast';
+    el.style.cssText = [
+      'position:fixed','top:12px','left:50%','transform:translateX(-50%)',
+      'background:#0a0a14','border:1px solid rgba(0,255,0,0.5)',
+      'color:#0f0','font-family:Orbitron,monospace','font-size:0.65rem',
+      'letter-spacing:0.15em','padding:6px 18px','border-radius:99px',
+      'z-index:99999','pointer-events:none',
+      'box-shadow:0 0 16px rgba(0,255,0,0.3)','white-space:nowrap'
+    ].join(';');
+    document.body.appendChild(el);
+  }
+  el.textContent = '⌨ ADMIN — ' + msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>{ el.style.transition='opacity 0.5s'; el.style.opacity='0'; }, 1800);
+}
 
 initStars();
 selectMode(1); // default to 1 player
