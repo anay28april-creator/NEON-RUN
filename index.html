@@ -1484,7 +1484,20 @@ function startGame() {
 
   // Load existing save for selected slot if it exists
   const save = getSave(activeSlot);
-  if (save && save.level > 1) {
+  if (save && save.completed) {
+    // World already beaten — show victory screen instead of loading into lvl 10
+    cancelAnimationFrame(animId); animId=null;
+    document.getElementById('overlay').style.display='flex';
+    const worldName = ['α','β','γ'][activeSlot];
+    showOverlay(`
+      <h1 style="color:#ffd700;text-shadow:0 0 20px #ffd700;font-size:2rem;">★ WORLD ${worldName} COMPLETE</h1>
+      <div class="tagline" style="color:rgba(255,215,0,0.6);margin-bottom:0.5rem;">THE OVERLORD WAS DEFEATED</div>
+      <div style="font-family:'Orbitron',monospace;font-size:1rem;color:#fff;margin-bottom:2rem;letter-spacing:0.1em;">FINAL SCORE: ${save.score.toLocaleString()}</div>
+      <button class="start-btn" onclick="startFresh()" style="border-color:#ffd700;color:#ffd700;margin-bottom:0.6rem;">PLAY AGAIN FROM START</button>
+      <button class="start-btn" onclick="doLeave()" style="border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.4);font-size:0.7rem;padding:0.5rem 1.5rem;">BACK TO MENU</button>
+    `);
+    return;
+  } else if (save && save.level > 1) {
     state = initLevel(save.level, false);
     state.score = save.score;
     state.lives = save.lives || 3;
@@ -1938,21 +1951,30 @@ function renderSaveSlots() {
 function selectSlot(i) {
   activeSlot = i;
   renderSaveSlots();
-  // Update insert coin button text based on whether save exists
   const save = getSave(i);
   const btn = document.getElementById('insert-coin-btn');
-  if (btn) btn.textContent = save ? 'CONTINUE' : 'NEW GAME';
+  if (!btn) return;
+  if (save && save.completed) {
+    btn.textContent = 'VIEW RESULTS';
+    btn.style.borderColor = '#ffd700';
+    btn.style.color = '#ffd700';
+  } else if (save) {
+    btn.textContent = 'CONTINUE';
+    btn.style.borderColor = '';
+    btn.style.color = '';
+  } else {
+    btn.textContent = 'NEW GAME';
+    btn.style.borderColor = '';
+    btn.style.color = '';
+  }
 }
 
 function confirmDeleteSave(slot) {
   const worldNames = ['WORLD α','WORLD β','WORLD γ'];
   if (confirm('Delete ' + worldNames[slot] + '? This cannot be undone.')) {
     deleteSave(slot);
-    if (activeSlot === slot) {
-      const btn = document.getElementById('insert-coin-btn');
-      if (btn) btn.textContent = 'NEW GAME';
-    }
     renderSaveSlots();
+    if (activeSlot === slot) selectSlot(slot); // re-evaluate button
   }
 }
 
