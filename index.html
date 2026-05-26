@@ -9,6 +9,8 @@
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
   body {
+    overscroll-behavior: none;
+    touch-action: none;
     background: #05050f;
     display: flex;
     flex-direction: column;
@@ -357,6 +359,7 @@
 <div id="hud">
   <div class="hud-item">SCORE<br><span class="hud-val" id="hud-score">0</span></div>
   <div class="hud-item" style="text-align:center;">LEVEL<br><span class="hud-val" id="hud-level">1</span></div>
+  <div class="hud-item" style="text-align:center;font-size:0.6rem;opacity:0.5;">WORLD<br><span class="hud-val" id="hud-world-label" style="font-size:0.9rem;opacity:0.6;"></span></div>
   <div class="hud-item" style="text-align:right;">LIVES<br><span class="hud-val" id="hud-lives">♦ ♦ ♦</span></div>
   <div class="hud-item" id="p2-hud-item" style="display:none;text-align:right;color:#f0f;">P2<br><span class="hud-val" id="hud-p2-status" style="color:#f0f;">⬡</span></div>
 </div>
@@ -589,7 +592,7 @@ function setupConn() {
   });
   mpConn.on('data', handleMpData);
   mpConn.on('close', ()=>{ mpReady=false; p2=null; setJoinStatus('Disconnected','#888'); });
-  mpConn.on('error', e=>console.warn('conn err',e));
+  mpConn.on('error', ()=>{});
 }
 
 function handleMpData(data) {
@@ -646,7 +649,10 @@ function handleMpData(data) {
         state.boss.flash = data.flash;
         if(data.dead && !state.boss.dead){
           state.boss.dead = true;
-          state.boss.deathTimer = 200;
+          state.boss.hackerUnlock = data.hackerUnlock || false;
+          const dt = data.hackerUnlock ? 120 : 200;
+          state.boss.deathTimer = dt;
+          state.boss.deathTimerMax = dt;
         }
       }
       break;
@@ -677,7 +683,7 @@ function sendMpState() {
     });
   }
   if(mpRole==='host' && state.boss && state.boss.dead){
-    mpConn.send({type:'bossupdate', hp:0, rage:true, x:state.boss.x, y:state.boss.y, flash:0, dead:true});
+    mpConn.send({type:'bossupdate', hp:0, rage:true, x:state.boss.x, y:state.boss.y, flash:0, dead:true, hackerUnlock:state.boss.hackerUnlock||false});
   }
 }
 
@@ -822,13 +828,77 @@ function stopMusic() {
 function startMusic(track) {
   if (currentTrack === track) return;
   stopMusic();
-  // Ensure audio is running
   if (!AC) return;
   if (AC.state === 'suspended') AC.resume();
   currentTrack = track;
   musicRunning = true;
   if (track === 'normal') scheduleNormal(acNow() + 0.05, true);
   else if (track === 'boss') scheduleBoss(acNow() + 0.05, true);
+  else if (track === 'hacker') scheduleHacker(acNow() + 0.05, true);
+}
+
+function scheduleHacker(start, first) {
+  if (!musicRunning || currentTrack !== 'hacker' || !AC) return;
+  const BPM=200, beat=60/BPM, bar=beat*4, loop=bar*4;
+
+  const mg=AC.createGain();
+  mg.gain.setValueAtTime(first?0:0.45,start);
+  if(first) mg.gain.linearRampToValueAtTime(0.45,start+0.4);
+  mg.connect(reverbSend);
+  mg.connect(musicMasterGain);
+
+  // Aggressive drone
+  [36.7,55,73.4].forEach(f=>{
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type='sawtooth'; o.frequency.value=f;
+    g.gain.setValueAtTime(0.07,start); g.gain.setValueAtTime(0.07,start+loop-0.05); g.gain.linearRampToValueAtTime(0,start+loop);
+    o.connect(g); g.connect(mg); o.start(start); o.stop(start+loop+0.05);
+  });
+
+  // Ultra-fast arp — green glitchy feel
+  const hackScale=[130.8,146.8,164.8,174.6,196,220,246.9,261.6,293.6];
+  const riff=[0,4,7,4,0,3,7,3,0,2,5,7,5,2,0,1,4,7,4,1,0,3,5,3,2,4,6,7,6,4,2,0];
+  riff.forEach((ni,i)=>{
+    const f=hackScale[ni%hackScale.length]*2;
+    const t0=start+i*beat*0.5;
+    makeSlide('square',f,f*1.003,t0,beat*0.42,0.07,mg);
+    if(i%4===0) makeOsc('sine',f*0.5,t0,beat*0.8,0.04,mg);
+  });
+
+  // Brutal kick every half beat
+  for(let b=0;b<32;b++){
+    const t0=start+b*beat*0.5;
+    makeSlide('sine',240,18,t0,0.1,0.35,mg);
+    makeNoise(t0,0.03,0.1,mg,100);
+  }
+  // Snare every beat
+  for(let b=0;b<16;b++){
+    const t0=start+b*beat;
+    makeNoise(t0,0.08,0.2,mg,3500);
+    makeOsc('square',160,t0,0.06,0.12,mg,0.003,0.04);
+  }
+  // 32nd hi-hats
+  for(let b=0;b<128;b++) makeNoise(start+b*beat*0.125,0.015,0.06,mg,11000);
+  // Glitch stabs
+  [0,0.25,1,1.75,2,2.5,3,3.25,3.75].forEach(bt=>{
+    const t0=start+bt*beat;
+    [130.8,196,261.6].forEach(f=>makeOsc('square',f,t0,0.08,0.09,mg,0.003,0.04));
+  });
+  // Screaming lead
+  const leadNotes=[523,659,784,880,1046,784,659,523];
+  leadNotes.forEach((f,i)=>{
+    const t0=start+i*beat*2;
+    const o=AC.createOscillator(),lfo=AC.createOscillator(),lg=AC.createGain(),g=AC.createGain();
+    o.type='sawtooth'; o.frequency.value=f;
+    lfo.type='sine'; lfo.frequency.value=12; lg.gain.value=f*0.5;
+    lfo.connect(lg); lg.connect(o.frequency);
+    g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(0.1,t0+0.02); g.gain.linearRampToValueAtTime(0,t0+beat*1.8);
+    o.connect(g); g.connect(mg); o.start(t0); o.stop(t0+beat*2);
+    lfo.start(t0); lfo.stop(t0+beat*2);
+  });
+
+  const delay=Math.max((start+loop-acNow()-0.6)*1000,50);
+  musicTimeouts.push(setTimeout(()=>scheduleHacker(start+loop,false),delay));
 }
 
 function scheduleNormal(start, first) {
@@ -1014,6 +1084,101 @@ const LEVEL_DEFS = [
 ];
 
 // ═══════════════════════════════════════════════════════════════
+// SECRET LEVEL 11 — HACKER MODE
+// ═══════════════════════════════════════════════════════════════
+const HACKER_LEVEL = {
+  name: 'HACKER MODE', bgTint: '#000800', glowColor: '#00ff00',
+  platforms: [
+    {x:0,y:420,w:800,h:20},
+    // Tight scattered platforms — harder than summit
+    {x:30,y:370,w:70,h:14},{x:160,y:350,w:60,h:14},{x:280,y:330,w:60,h:14},
+    {x:400,y:310,w:60,h:14},{x:520,y:330,w:60,h:14},{x:640,y:350,w:70,h:14},
+    {x:90,y:270,w:60,h:14},{x:220,y:250,w:60,h:14},{x:350,y:240,w:60,h:14},
+    {x:480,y:250,w:60,h:14},{x:610,y:265,w:60,h:14},{x:710,y:280,w:70,h:14},
+    {x:40,y:190,w:60,h:14},{x:170,y:175,w:60,h:14},{x:310,y:165,w:60,h:14},
+    {x:440,y:170,w:60,h:14},{x:570,y:180,w:60,h:14},{x:690,y:195,w:60,h:14},
+    {x:120,y:115,w:60,h:14},{x:260,y:100,w:60,h:14},{x:400,y:90,w:80,h:14},
+    {x:530,y:100,w:60,h:14},{x:660,y:115,w:70,h:14},
+  ],
+  coins: [
+    {x:65,y:350},{x:190,y:330},{x:310,y:310},{x:430,y:290},{x:550,y:310},{x:675,y:330},
+    {x:120,y:250},{x:250,y:230},{x:380,y:220},{x:510,y:230},{x:640,y:245},{x:740,y:260},
+    {x:70,y:170},{x:200,y:155},{x:340,y:145},{x:470,y:150},{x:600,y:160},{x:720,y:175},
+    {x:150,y:95},{x:290,y:80},{x:440,y:70},{x:560,y:80},{x:695,y:95},
+  ],
+  enemies: [
+    // Hacker enemies — fast big ones everywhere
+    {x:35,minX:30,maxX:90,speed:4.5,big:true},
+    {x:165,minX:160,maxX:210,speed:4.8,big:true},
+    {x:285,minX:280,maxX:330,speed:5.0,big:true},
+    {x:405,minX:400,maxX:450,speed:5.2,big:true},
+    {x:525,minX:520,maxX:570,speed:4.8,big:true},
+    {x:645,minX:640,maxX:700,speed:4.5,big:true},
+    {x:95,minX:90,maxX:140,speed:5.5,big:true},
+    {x:225,minX:220,maxX:270,speed:5.8,big:true},
+    {x:355,minX:350,maxX:400,speed:6.0,big:true},
+    {x:485,minX:480,maxX:530,speed:5.5,big:true},
+    {x:615,minX:610,maxX:660,speed:5.2,big:true},
+    {x:715,minX:710,maxX:770,speed:4.8,big:true},
+  ]
+};
+
+function isHackerLevel() { return state && state.level === 11; }
+
+function triggerHackerLevel() {
+  stopMusic();
+  // Build level 11 state
+  const def = HACKER_LEVEL;
+  const platforms = def.platforms.map((p,i)=>({...p,h:p.h||14,color:i===0?'#001400':'#002200'}));
+  const coins = def.coins.map(c=>({x:c.x,y:c.y,r:6,collected:false,pulse:Math.random()*Math.PI*2}));
+  const enemies = def.enemies.map(e=>{
+    const en={x:e.x,y:0,w:22,h:26,vx:(Math.random()<0.5?1:-1)*e.speed,minX:e.minX,maxX:e.maxX,dead:false,flash:0,big:true,sfxPlayed:false,_placed:false};
+    platforms.forEach(pl=>{ if(!en._placed&&en.x>=pl.x&&en.x<=pl.x+pl.w){en.y=pl.y-en.h;en._placed=true;} });
+    if(!en._placed) en.y=H-20-en.h;
+    return en;
+  });
+  state = {
+    level:11, name:'HACKER MODE', glowColor:'#00ff00', bgTint:'#000800',
+    score: state ? state.score : 0,
+    lives: state ? state.lives : 3,
+    platforms, coins, enemies, powerups:[],
+    boss:null, bossPhase:false, _localDone:false,
+    bossStartTime:0, hackerTriggered:false,
+    activePowerups:[],
+    player:{x:60,y:H-80,w:18,h:24,vx:0,vy:0,onGround:false,jumpsLeft:2,trail:[],invincible:0,dead:false},
+    particles:[], tick:0
+  };
+  document.getElementById('boss-hud').style.display='none';
+  updateHUD();
+  setTimeout(()=>startMusic('hacker'), 400);
+  if(!animId) loop();
+}
+
+// Hacker boss (spawns when coins cleared on level 11)
+function spawnHackerBoss() {
+  state.bossPhase = true;
+  state.boss = {
+    x:W/2-70, y:40, w:140, h:110,
+    hp:20, maxHp:20,           // double the normal boss HP
+    vx:3.5, floatTick:0, floatBase:35, floatAmp:25, floatSpeed:0.035,
+    shootTimer:0, shootInterval:45, // shoots almost twice as fast
+    stompCooldown:0, dead:false, deathTimer:0,
+    rage:false, flash:0, projectiles:[],
+    deathSfxPlayed:false, hackerUnlock:false
+  };
+  document.getElementById('boss-hud').style.display='block';
+  document.getElementById('boss-label').textContent='⚠ HACKER CORE';
+  updateBossHUD();
+  sfxLevelUp();
+  setTimeout(()=>startMusic('hacker'), 300);
+  if(mpReady&&mpConn) mpConn.send({type:'boss'});
+}
+
+function showHackerUnlock() {
+  adminToast('⚡ SPEEDKILL! HACKER MODE UNLOCKED');
+}
+
+// ═══════════════════════════════════════════════════════════════
 // INIT LEVEL
 // ═══════════════════════════════════════════════════════════════
 function getLevelDef(level) { return LEVEL_DEFS[(level-1) % LEVEL_DEFS.length]; }
@@ -1052,6 +1217,8 @@ function initLevel(level, freshStart) {
     platforms, coins, enemies, powerups,
     boss: null, bossPhase: false,
     _localDone: false,
+    bossStartTime: 0,
+    hackerTriggered: false,
     activePowerups: [], // { typeId, remaining, total }
     player: {x:60,y:H-80,w:18,h:24,vx:0,vy:0,onGround:false,jumpsLeft:2,trail:[],invincible:0,dead:false},
     particles: [],
@@ -1076,6 +1243,7 @@ function spawnBoss() {
   document.getElementById('boss-hud').style.display='block';
   updateBossHUD();
   sfxLevelUp();
+  state.bossStartTime = performance.now();
   setTimeout(()=>startMusic('boss'), 600);
   // Tell P2 to spawn boss too
   if(mpReady&&mpConn) mpConn.send({type:'boss'});
@@ -1087,6 +1255,29 @@ function updateBossHUD() {
   document.getElementById('boss-hp-text').textContent=Math.max(0,b.hp)+'/'+b.maxHp;
 }
 
+function drawBossTimer() {
+  if(!state||!state.bossPhase||!state.bossStartTime||!state.boss||state.boss.dead) return;
+  const elapsed = (performance.now()-state.bossStartTime)/1000;
+  const remaining = Math.max(0, 10-elapsed);
+  if(elapsed>10) return; // timer expired — no longer relevant
+  const frac = remaining/10;
+  const col = frac>0.5?'#0f0':(frac>0.25?'#ff0':'#f33');
+  ctx.save();
+  ctx.font='900 0.7rem Orbitron,monospace';
+  ctx.fillStyle=col; ctx.shadowColor=col; ctx.shadowBlur=10;
+  ctx.textAlign='center';
+  ctx.fillText('⚡ SPEEDKILL: '+remaining.toFixed(1)+'s', W/2, H-14);
+  // Small arc timer
+  const cx2=W-28,cy2=H-28,r=18;
+  ctx.strokeStyle='rgba(255,255,255,0.1)'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.arc(cx2,cy2,r,0,Math.PI*2); ctx.stroke();
+  ctx.strokeStyle=col; ctx.shadowBlur=8;
+  ctx.beginPath(); ctx.arc(cx2,cy2,r,-Math.PI/2,-Math.PI/2+Math.PI*2*frac); ctx.stroke();
+  ctx.fillStyle=col; ctx.font='700 0.5rem Orbitron,monospace';
+  ctx.fillText(Math.ceil(remaining),cx2,cy2+4);
+  ctx.shadowBlur=0; ctx.textAlign='left'; ctx.restore();
+}
+
 function updateBoss() {
   const boss=state.boss;
   if(!boss) return;
@@ -1094,7 +1285,11 @@ function updateBoss() {
   if(boss.dead) {
     boss.deathTimer--;
     if(!boss.deathSfxPlayed){ boss.deathSfxPlayed=true; sfxBossDeath(); }
-    if(boss.deathTimer<=0) showVictory();
+    if(boss.deathTimer<=0){
+      if(boss.hackerUnlock) triggerHackerLevel();
+      else if(isHackerLevel()) showHackerVictory();
+      else showVictory();
+    }
     return;
   }
 
@@ -1139,10 +1334,20 @@ function updateBoss() {
         updateHUD(); updateBossHUD();
         sfxBossStomp();
         if(boss.hp<=0){
-          boss.dead=true; boss.deathTimer=200; state.score+=500; updateHUD();
+          const elapsed = (performance.now() - state.bossStartTime) / 1000;
+          const hackerUnlocked = elapsed <= 10 && !state.hackerTriggered && state.level === 10;
+          const dt = hackerUnlocked ? 120 : 200;
+          boss.dead=true; boss.deathTimer=dt; boss.deathTimerMax=dt;
+          boss.hackerUnlock = hackerUnlocked;
+          state.score+=500; updateHUD();
           document.getElementById('boss-hud').style.display='none';
+          if(hackerUnlocked){
+            state.hackerTriggered = true;
+            // Flash the screen green and show secret message
+            showHackerUnlock();
+          }
           for(let i=0;i<6;i++) setTimeout(()=>{
-            if(state&&state.boss) spawnParticles(state.boss.x+Math.random()*state.boss.w,state.boss.y+Math.random()*state.boss.h,['#f33','#f80','#ff0','#fff','#0ff'][Math.floor(Math.random()*5)],18);
+            if(state&&state.boss) spawnParticles(state.boss.x+Math.random()*state.boss.w,state.boss.y+Math.random()*state.boss.h,(hackerUnlocked?['#0f0','#0ff','#fff']:['#f33','#f80','#ff0','#fff','#0ff'])[Math.floor(Math.random()*5)],18);
           },i*130);
         }
       } else { loseLife(); }
@@ -1246,8 +1451,13 @@ function drawPowerups() {
 
 function updateHUD() {
   document.getElementById('hud-score').textContent=state.score;
+  const wLabel=document.getElementById('hud-world-label'); if(wLabel) wLabel.textContent=['α','β','γ'][activeSlot]||'';
   document.getElementById('hud-level').textContent=state.level;
-  document.getElementById('hud-lives').textContent=Array(Math.max(0,state.lives)).fill('♦').join(' ')||'—';
+  document.title = 'NEON RUN — LVL ' + state.level + (state.name ? ' · ' + state.name : '');
+  const livesDisplay = state.lives > 10
+    ? '♥ ×' + state.lives
+    : Array(Math.max(0,state.lives)).fill('♥').join(' ') || '—';
+  document.getElementById('hud-lives').textContent = livesDisplay;
 }
 
 function update() {
@@ -1357,7 +1567,16 @@ function update() {
 
   const allCoins = state.coins.length>0 && state.coins.every(co=>co.collected);
 
-  if(state.level===10){
+  if(state.level===11){
+    if(allCoins && !state.bossPhase){
+      if(gameMode===1){ spawnHackerBoss(); }
+      else if(mpRole==='host'){
+        if(!state._localDone){ state._localDone=true; if(mpReady&&mpConn) mpConn.send({type:'localready'}); }
+        if(state._localDone && p2LevelReady){ p2LevelReady=false; state._localDone=false; spawnHackerBoss(); }
+      }
+    }
+    if(state.bossPhase) updateBoss();
+  } else if(state.level===10){
     if(allCoins && !state.bossPhase){
       if(gameMode===1){
         spawnBoss();
@@ -1428,6 +1647,24 @@ function gameOver() {
     <button class="start-btn" onclick="startFresh()" style="border-color:#ff3e6c;color:#ff3e6c;margin-bottom:0.6rem;">TRY AGAIN</button>
     <button class="start-btn" onclick="doLeave()" style="border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.4);font-size:0.7rem;padding:0.5rem 1.5rem;">BACK TO MENU</button>
   `);
+}
+
+function showHackerVictory() {
+  if(mpReady&&mpConn) mpConn.send({type:'victory'});
+  if(state){ saveProgress(true); }
+  cancelAnimationFrame(animId); animId=null; stopMusic(); sfxVictory();
+  document.getElementById('boss-hud').style.display='none';
+  document.getElementById('powerup-bar').innerHTML='';
+  document.getElementById('exit-btn').style.display='none';
+  const score=state?state.score:0;
+  showOverlay(
+    '<h1 style="color:#00ff00;text-shadow:0 0 20px #00ff00,0 0 60px rgba(0,255,0,0.4);font-size:2rem;animation:bossLabelPulse 1s infinite;">HACKER DEFEATED</h1>' +
+    '<div class="tagline" style="color:rgba(0,255,0,0.6);margin-bottom:0.5rem;">YOU ARE THE GRID</div>' +
+    '<div style="font-family:Orbitron,monospace;font-size:0.7rem;color:rgba(0,255,0,0.5);margin-bottom:0.5rem;letter-spacing:0.1em;">SECRET LEVEL COMPLETE</div>' +
+    '<div style="font-family:Orbitron,monospace;font-size:1.1rem;color:#fff;margin-bottom:2rem;letter-spacing:0.1em;">FINAL SCORE: ' + score.toLocaleString() + '</div>' +
+    '<button class="start-btn" onclick="startFresh()" style="border-color:#00ff00;color:#00ff00;margin-bottom:0.6rem;">PLAY AGAIN</button>' +
+    '<button class="start-btn" onclick="doLeave()" style="border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.4);font-size:0.7rem;padding:0.5rem 1.5rem;">BACK TO MENU</button>'
+  );
 }
 
 function showVictory() {
@@ -1523,6 +1760,28 @@ function hexToRgb(h){return `${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5
 function drawBg() {
   ctx.fillStyle=state.bgTint||'#05050f';
   ctx.fillRect(0,0,W,H);
+
+  // Hacker mode matrix rain effect
+  if(isHackerLevel()){
+    ctx.font='10px Share Tech Mono,monospace';
+    ctx.fillStyle='rgba(0,255,0,0.08)';
+    const cols=Math.floor(W/12);
+    for(let col=0;col<cols;col++){
+      const char=String.fromCharCode(0x30A0+Math.floor(Math.random()*96));
+      const rowCount=Math.floor(H/12);
+      for(let row=0;row<rowCount;row++){
+        if(Math.random()<0.04){
+          ctx.fillStyle=`rgba(0,255,0,${Math.random()*0.12})`;
+          ctx.fillText(char,col*12,row*12);
+        }
+      }
+    }
+    // Scan line
+    const scanY=(state.tick*2)%H;
+    ctx.fillStyle='rgba(0,255,0,0.04)';
+    ctx.fillRect(0,scanY,W,2);
+    return;
+  }
   const gc=state.glowColor||'#0ff';
   ctx.strokeStyle=`rgba(${hexToRgb(gc)},0.06)`;
   ctx.lineWidth=1;
@@ -1560,10 +1819,11 @@ function drawCoin(c) {
 function drawEnemy(en) {
   if(en.dead)return;
   const flicker=en.flash>0&&Math.sin(en.flash*0.5)>0;
-  ctx.shadowColor=en.big?'#f40':'#f0f'; ctx.shadowBlur=flicker?24:(en.big?16:10);
-  ctx.fillStyle=flicker?'#fff':(en.big?'#ff2200':'#cc00cc');
+  const isHackerEnemy = isHackerLevel && isHackerLevel() && en.big;
+  ctx.shadowColor=isHackerEnemy?'#00ff00':(en.big?'#f40':'#f0f'); ctx.shadowBlur=flicker?24:(en.big?16:10);
+  ctx.fillStyle=flicker?'#fff':(isHackerEnemy?'#00aa00':(en.big?'#ff2200':'#cc00cc'));
   ctx.beginPath(); ctx.moveTo(en.x+en.w/2,en.y); ctx.lineTo(en.x+en.w,en.y+en.h); ctx.lineTo(en.x,en.y+en.h); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle=en.big?'#f40':'#f0f'; ctx.lineWidth=en.big?2:1; ctx.stroke();
+  ctx.strokeStyle=isHackerEnemy?'#00ff00':(en.big?'#f40':'#f0f'); ctx.lineWidth=en.big?2:1; ctx.stroke();
   ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(en.x+en.w/2,en.y+en.h*0.55,en.big?3.5:2.5,0,Math.PI*2); ctx.fill();
   ctx.shadowBlur=0;
 }
@@ -1574,17 +1834,19 @@ function drawBoss() {
   const flicker=boss.flash>0&&Math.floor(boss.flash/4)%2===0;
 
   if(boss.dead){
-    const prog=1-boss.deathTimer/200;
+    const dtMax = boss.deathTimerMax || 200;
+    const prog=1-boss.deathTimer/dtMax;
     ctx.globalAlpha=Math.max(0,1-prog*2);
-    ctx.shadowColor='#f80'; ctx.shadowBlur=40; ctx.fillStyle='#ff4400';
+    const deadCol = boss.hackerUnlock ? '#00ff00' : '#ff4400';
+    ctx.shadowColor=deadCol; ctx.shadowBlur=40; ctx.fillStyle=deadCol;
     ctx.beginPath(); ctx.arc(cx,boss.y+boss.h/2,boss.w/2*(1-prog),0,Math.PI*2); ctx.fill();
     ctx.globalAlpha=1; ctx.shadowBlur=0; return;
   }
 
   const pulse=Math.sin(t*0.05)*6;
-  const glowCol=boss.rage?'#f80':'#f0a';
+  const glowCol=isHackerLevel()?'#00ff00':(boss.rage?'#f80':'#f0a');
   ctx.shadowColor=glowCol; ctx.shadowBlur=30+pulse;
-  ctx.fillStyle=flicker?'#fff':(boss.rage?'#ff2200':'#cc0044');
+  ctx.fillStyle=flicker?'#0f0':(isHackerLevel()?'#004400':(boss.rage?'#ff2200':'#cc0044'));
   ctx.beginPath();
   for(let i=0;i<6;i++){
     const ang=(Math.PI*2/6)*i-Math.PI/2;
@@ -1594,7 +1856,7 @@ function drawBoss() {
   ctx.closePath(); ctx.fill();
   ctx.strokeStyle=flicker?'#ff0':glowCol; ctx.lineWidth=3; ctx.stroke();
 
-  ctx.fillStyle=flicker?'#ff0':(boss.rage?'#ff6600':'#ff0088');
+  ctx.fillStyle=flicker?'#0ff':(isHackerLevel()?'#00cc00':(boss.rage?'#ff6600':'#ff0088'));
   ctx.shadowBlur=15; ctx.beginPath(); ctx.arc(cx,boss.y+boss.h/2,(boss.w/2+pulse*0.4)*0.45,0,Math.PI*2); ctx.fill();
 
   ctx.shadowColor='#fff'; ctx.shadowBlur=12; ctx.fillStyle='#fff';
@@ -1720,6 +1982,7 @@ function draw() {
   drawP2();
   drawPlayer(state.player);
   drawParticles();
+  drawBossTimer();
   drawLevelBanner();
 }
 
@@ -1799,8 +2062,9 @@ function openCheat() {
   const grid = document.getElementById('cheat-grid');
   grid.innerHTML = '';
   const currentLvl = state ? state.level : 0;
-  for(let i = 1; i <= 10; i++){
-    const def = LEVEL_DEFS[i-1];
+  const maxLevel = 11; // include secret hacker level
+  for(let i = 1; i <= maxLevel; i++){
+    const def = i===11 ? HACKER_LEVEL : LEVEL_DEFS[i-1];
     const btn = document.createElement('button');
     btn.className = 'cheat-lvl-btn' + (i===currentLvl?' current':'');
     btn.innerHTML = i + '<br><span style="font-size:0.45rem;opacity:0.6;letter-spacing:0.05em;">' + (def?def.name.split(' ')[0]:'???') + '</span>';
@@ -1828,6 +2092,7 @@ function warpToLevel(lvl) {
   const prevScore = state ? state.score : 0;
   const prevLives = state ? state.lives : 3;
   p2LevelReady = false;
+  if(lvl===11){ triggerHackerLevel(); return; }
   state = initLevel(lvl, false);
   state.score = prevScore;
   state.lives = prevLives;
@@ -1850,9 +2115,14 @@ window.addEventListener('keydown', e => {
   if(e.key==='6' && (e.ctrlKey||e.metaKey)){
     e.preventDefault();
     if(state && state.boss && !state.boss.dead){
+      const elapsed = state.bossStartTime ? (performance.now()-state.bossStartTime)/1000 : 999;
+      const hackerUnlocked = elapsed <= 10 && !state.hackerTriggered && state.level === 10;
+      const dt = hackerUnlocked ? 120 : 200;
       state.boss.hp = 0;
       state.boss.dead = true;
-      state.boss.deathTimer = 200;
+      state.boss.deathTimer = dt;
+      state.boss.deathTimerMax = dt;
+      state.boss.hackerUnlock = hackerUnlocked;
       state.score += 500;
       updateHUD();
       document.getElementById('boss-hud').style.display='none';
@@ -1860,9 +2130,9 @@ window.addEventListener('keydown', e => {
         if(state&&state.boss) spawnParticles(
           state.boss.x + Math.random()*state.boss.w,
           state.boss.y + Math.random()*state.boss.h,
-          ['#f33','#f80','#ff0','#fff','#0ff'][Math.floor(Math.random()*5)], 20);
+          (hackerUnlocked?['#0f0','#0ff','#fff']:['#f33','#f80','#ff0','#fff','#0ff'])[Math.floor(Math.random()*5)], 20);
       }, i*100);
-      adminToast('☠ BOSS OBLITERATED');
+      adminToast(hackerUnlocked ? '⚡ HACKER MODE UNLOCKED' : '☠ BOSS OBLITERATED');
     } else {
       adminToast('No boss active');
     }
@@ -2005,11 +2275,12 @@ function openExitModal() {
   const sub = document.querySelector('#exit-box .exit-sub');
   if (sub) sub.textContent = 'WORLD ' + ['α','β','γ'][activeSlot] + ' — auto-saves every 10s';
   document.getElementById('exit-modal').classList.add('open');
+  if(AC) AC.suspend(); // mute audio while paused
 }
 
 function closeExitModal() {
   document.getElementById('exit-modal').classList.remove('open');
-  // Resume game loop
+  if(AC && AC.state==='suspended') AC.resume();
   if (state && !animId) loop();
 }
 
@@ -2031,16 +2302,57 @@ function doLeave() {
   stopMusic();
   clearInterval(autoSaveInterval);
   state = null; p2 = null;
+  document.title = 'NEON RUN';
   document.getElementById('exit-btn').style.display = 'none';
   document.getElementById('boss-hud').style.display = 'none';
   document.getElementById('powerup-bar').innerHTML = '';
   document.getElementById('p2-hud-item').style.display = 'none';
-  // Re-show start overlay with fresh save slots
+  document.getElementById('exit-modal').classList.remove('open');
+
+  // Restore the full start screen inside the overlay
   const ov = document.getElementById('overlay');
-  ov.style.cssText = '';
-  ov.style.display = 'flex';
+  ov.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;position:absolute;inset:0;background:rgba(5,5,15,0.88);backdrop-filter:blur(4px);';
+  const isMobile = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  const instructions = isMobile
+    ? 'TAP ◀ ▶ to move &amp; ▲ to jump &nbsp;|&nbsp; Stomp enemies<br>Collect all orbs to advance &nbsp;|&nbsp; Level 10: BOSS fight!'
+    : 'ARROW KEYS or WASD — move &amp; jump &nbsp;|&nbsp; Stomp enemies<br>Collect all orbs to advance &nbsp;|&nbsp; Level 10: BOSS fight!';
+  ov.innerHTML = `
+    <h1>NEON RUN</h1>
+    <div class="tagline">SURVIVE THE GRID</div>
+    <div class="instructions">${instructions}</div>
+    <div id="save-section">
+      <div class="save-label">Select World Save</div>
+      <div class="save-slots" id="save-slots"></div>
+    </div>
+    <div class="mode-btns">
+      <button class="mode-btn active" id="btn-1p" onclick="selectMode(1)">1 PLAYER</button>
+      <button class="mode-btn" id="btn-2p" onclick="selectMode(2)">2 PLAYER</button>
+    </div>
+    <div id="lobby-area" style="display:none;">
+      <div class="mode-btns" id="hj-toggle">
+        <button class="mode-btn active" id="btn-host" onclick="switchLobby('host')">HOST GAME</button>
+        <button class="mode-btn" id="btn-join" onclick="switchLobby('join')">JOIN GAME</button>
+      </div>
+      <div id="host-panel" style="display:none;">
+        <div class="lobby-label">Your room code — share this with your friend</div>
+        <div style="font-family:'Orbitron',monospace;font-size:2.2rem;font-weight:900;color:#0ff;letter-spacing:0.35em;margin:0.5rem 0;" id="room-code-display">----</div>
+        <div id="host-status" style="font-size:0.68rem;letter-spacing:0.1em;min-height:1.2rem;color:rgba(0,255,255,0.5);">Generating code…</div>
+      </div>
+      <div id="join-panel" style="display:none;">
+        <div class="lobby-label">Enter the 4-letter code from your friend</div>
+        <input id="code-input" maxlength="4" placeholder="XXXX"
+               oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"
+               onkeydown="if(event.key==='Enter')joinRoom()">
+        <br><br>
+        <button class="start-btn" onclick="joinRoom()" style="font-size:0.75rem;padding:0.6rem 1.8rem;">CONNECT</button>
+        <div id="join-status" style="font-size:0.68rem;letter-spacing:0.1em;min-height:1.2rem;margin-top:0.5rem;color:rgba(255,0,255,0.6);"></div>
+      </div>
+    </div>
+    <button class="start-btn" id="insert-coin-btn" onclick="startGame()">NEW GAME</button>
+  `;
   renderSaveSlots();
   selectSlot(activeSlot);
+  selectMode(gameMode);
 }
 
 // ─── AUTOSAVE TOAST ───────────────────────────────────────────
@@ -2053,6 +2365,38 @@ function showAutoSaveToast(msg) {
   el._t = setTimeout(() => { el.style.opacity = '0'; }, 2000);
 }
 
+
+// roundRect polyfill for older Safari/Android
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    r = Math.min(r, w/2, h/2);
+    this.beginPath();
+    this.moveTo(x+r,y);
+    this.lineTo(x+w-r,y);
+    this.arcTo(x+w,y,x+w,y+r,r);
+    this.lineTo(x+w,y+h-r);
+    this.arcTo(x+w,y+h,x+w-r,y+h,r);
+    this.lineTo(x+r,y+h);
+    this.arcTo(x,y+h,x,y+h-r,r);
+    this.lineTo(x,y+r);
+    this.arcTo(x,y,x+r,y,r);
+    this.closePath();
+  };
+}
+
+// Pause/resume audio when tab visibility changes
+document.addEventListener('visibilitychange', () => {
+  if (!AC) return;
+  if (document.hidden) {
+    AC.suspend();
+  } else {
+    AC.resume();
+    // If game is running and music stopped, restart it
+    if (state && animId && !musicRunning) {
+      startMusic(state.bossPhase ? 'boss' : 'normal');
+    }
+  }
+});
 initStars();
 selectMode(1); // default to 1 player
 renderSaveSlots();
