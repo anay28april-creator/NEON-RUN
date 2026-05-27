@@ -180,6 +180,9 @@
   .save-slot.completed-slot { border-color:rgba(255,215,0,0.5); background:rgba(255,215,0,0.04); }
   .save-slot.completed-slot:hover { border-color:#ffd700; background:rgba(255,215,0,0.09); }
   .save-slot.active-slot.completed-slot { border-color:#ffd700; box-shadow:0 0 14px rgba(255,215,0,0.35); }
+  .save-slot.hacker-slot { border-color:rgba(0,255,0,0.35); background:rgba(0,255,0,0.03); }
+  .save-slot.hacker-slot:hover { border-color:#00ff00; background:rgba(0,255,0,0.08); }
+  .save-slot.active-slot.hacker-slot { border-color:#00ff00; box-shadow:0 0 14px rgba(0,255,0,0.35); }
   .save-slot .slot-world {
     font-family:'Orbitron',monospace; font-size:0.6rem; font-weight:700;
     letter-spacing:0.18em; color:#0ff; margin-bottom:3px;
@@ -619,9 +622,10 @@ function handleMpData(data) {
     case 'levelchange':
       // Host advanced level — P2 follows
       if(state){
+        const prevLives = state.lives;
         const s = initLevel(data.level);
         s.score = data.score;
-        s.lives = state.lives;
+        s.lives = Math.max(prevLives, 1);
         state = s;
         p2LevelReady = false;
         updateHUD();
@@ -1234,8 +1238,8 @@ function spawnBoss() {
   state.boss = {
     x:W/2-55, y:60, w:110, h:90,
     hp:BOSS_MAX_HP, maxHp:BOSS_MAX_HP,
-    vx:2.0, floatTick:0, floatBase:50, floatAmp:30, floatSpeed:0.022,
-    shootTimer:0, shootInterval:100,
+    vx:1.2, floatTick:0, floatBase:50, floatAmp:20, floatSpeed:0.015,
+    shootTimer:0, shootInterval:140,
     stompCooldown:0, dead:false, deathTimer:0,
     rage:false, flash:0, projectiles:[],
     deathSfxPlayed:false, lastFlash:0
@@ -1301,7 +1305,7 @@ function updateBoss() {
   if(boss.stompCooldown>0) boss.stompCooldown--;
 
   if(!boss.rage&&boss.hp<=boss.maxHp/2) {
-    boss.rage=true; boss.shootInterval=55; boss.vx*=1.6;
+    boss.rage=true; boss.shootInterval=90; boss.vx*=1.3; // was 55 interval, 1.6x speed
     spawnParticles(boss.x+boss.w/2,boss.y+boss.h/2,'#f80',22);
   }
 
@@ -1316,10 +1320,10 @@ function updateBoss() {
     const pr=boss.projectiles[i];
     pr.x+=pr.vx; pr.y+=pr.vy;
     if(pr.x<-20||pr.x>W+20||pr.y<-20||pr.y>H+20){boss.projectiles.splice(i,1);continue;}
-    const p=state.player;
-    if(p.invincible===0){
-      const dx=pr.x-(p.x+p.w/2),dy=pr.y-(p.y+p.h/2);
-      if(Math.sqrt(dx*dx+dy*dy)<pr.r+9){boss.projectiles.splice(i,1);loseLife();}
+    const pp=state.player;
+    if(pp.invincible===0){
+      const dx=pr.x-(pp.x+pp.w/2),dy=pr.y-(pp.y+pp.h/2);
+      if(Math.sqrt(dx*dx+dy*dy)<pr.r+7){ boss.projectiles.splice(i,1); loseLife(); }
     }
   }
 
@@ -1360,11 +1364,13 @@ function shootAtPlayer(boss) {
   const cx=boss.x+boss.w/2,cy=boss.y+boss.h*0.6;
   const dx=(p.x+p.w/2)-cx,dy=(p.y+p.h/2)-cy;
   const dist=Math.sqrt(dx*dx+dy*dy)||1;
-  const spd=boss.rage?5.5:3.8;
-  boss.projectiles.push({x:cx,y:cy,vx:dx/dist*spd,vy:dy/dist*spd,r:boss.rage?8:5});
+  // Easier: slower projectiles, smaller hit radius
+  const spd=boss.rage?3.5:2.4;
+  boss.projectiles.push({x:cx,y:cy,vx:dx/dist*spd,vy:dy/dist*spd,r:boss.rage?5:4});
   if(boss.rage){
+    // Only 2 spread shots, slower and wider so easier to dodge
     const ang=Math.atan2(dy,dx);
-    for(const a of [ang-0.38,ang+0.38]) boss.projectiles.push({x:cx,y:cy,vx:Math.cos(a)*spd*0.85,vy:Math.sin(a)*spd*0.85,r:5});
+    for(const a of [ang-0.5,ang+0.5]) boss.projectiles.push({x:cx,y:cy,vx:Math.cos(a)*spd*0.7,vy:Math.sin(a)*spd*0.7,r:4});
   }
 }
 
@@ -1594,7 +1600,10 @@ function update() {
         // Solo: advance immediately
         state.score+=100*state.level; sfxLevelUp();
         const nxt=state.level+1;
+        const keptLives=state.lives;
         state=initLevel(nxt); updateHUD();
+        state.lives=keptLives; updateHUD();
+        saveProgress();
         setTimeout(()=>startMusic('normal'),300);
       } else if(mpRole==='host'){
         // 2P host: wait for BOTH players to clear coins
@@ -1603,7 +1612,10 @@ function update() {
           p2LevelReady=false; state._localDone=false;
           state.score+=100*state.level; sfxLevelUp();
           const nxt=state.level+1;
+          const keptLives=state.lives;
           state=initLevel(nxt); updateHUD();
+          state.lives=keptLives; updateHUD();
+          saveProgress();
           setTimeout(()=>startMusic('normal'),300);
           if(mpReady&&mpConn) mpConn.send({type:'levelchange', level:nxt, score:state.score});
         }
@@ -1640,9 +1652,16 @@ function gameOver() {
   document.getElementById('powerup-bar').innerHTML='';
   document.getElementById('exit-btn').style.display='none';
   const score=state?state.score:0, level=state?state.level:1;
+  // Reset save to level 1 with 3 lives — player died, next load should start fresh
+  // Keep score as a record of how far they got
+  const existing = getSave(activeSlot);
+  if(existing && !existing.completed){
+    setSave(activeSlot, { level:1, score:0, lives:3, date:existing.date, completed:false, bestScore: Math.max(score, existing.bestScore||0) });
+  }
+  clearInterval(autoSaveInterval);
   showOverlay(`
     <h1 style="color:#ff3e6c;text-shadow:0 0 20px #ff3e6c;">GAME OVER</h1>
-    <div style="font-family:'Orbitron',monospace;font-size:1rem;color:#ff3e6c;margin-bottom:1rem;letter-spacing:0.1em;">SCORE: ${score}</div>
+    <div style="font-family:'Orbitron',monospace;font-size:1rem;color:#ff3e6c;margin-bottom:0.5rem;letter-spacing:0.1em;">SCORE: ${score}</div>
     <div class="tagline" style="margin-bottom:1.5rem;">LEVEL ${level} REACHED</div>
     <button class="start-btn" onclick="startFresh()" style="border-color:#ff3e6c;color:#ff3e6c;margin-bottom:0.6rem;">TRY AGAIN</button>
     <button class="start-btn" onclick="doLeave()" style="border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.4);font-size:0.7rem;padding:0.5rem 1.5rem;">BACK TO MENU</button>
@@ -1721,7 +1740,27 @@ function startGame() {
 
   // Load existing save for selected slot if it exists
   const save = getSave(activeSlot);
-  if (save && save.completed) {
+  if (save && save.completed && save.level === 11) {
+    // Hacker mode completed
+    cancelAnimationFrame(animId); animId=null;
+    showOverlay(
+      '<h1 style="color:#00ff00;text-shadow:0 0 20px #00ff00;font-size:2rem;animation:bossLabelPulse 1s infinite;">★ HACKER COMPLETE</h1>' +
+      '<div class="tagline" style="color:rgba(0,255,0,0.6);margin-bottom:0.5rem;">YOU CONQUERED THE GRID</div>' +
+      '<div style="font-family:Orbitron,monospace;font-size:1rem;color:#fff;margin-bottom:2rem;letter-spacing:0.1em;">FINAL SCORE: ' + (save.score||0).toLocaleString() + '</div>' +
+      '<button class="start-btn" onclick="startFresh()" style="border-color:#00ff00;color:#00ff00;margin-bottom:0.6rem;">PLAY AGAIN FROM START</button>' +
+      '<button class="start-btn" onclick="doLeave()" style="border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.4);font-size:0.7rem;padding:0.5rem 1.5rem;">BACK TO MENU</button>'
+    );
+    return;
+  } else if (save && save.level === 11) {
+    // Saved in hacker mode — go straight there
+    state = null;
+    triggerHackerLevel();
+    if(state){ state.score = save.score; state.lives = Math.max(save.lives||3, 3); updateHUD(); }
+    showDpad();
+    document.getElementById('exit-btn').style.display='block';
+    startAutoSave();
+    return;
+  } else if (save && save.completed) {
     // World already beaten — show victory screen instead of loading into lvl 10
     cancelAnimationFrame(animId); animId=null;
     document.getElementById('overlay').style.display='flex';
@@ -1737,7 +1776,7 @@ function startGame() {
   } else if (save && save.level > 1) {
     state = initLevel(save.level, false);
     state.score = save.score;
-    state.lives = save.lives || 3;
+    state.lives = Math.max(save.lives || 3, 3); // always restore at least 3 lives
     updateHUD();
     adminToast('WORLD ' + ['α','β','γ'][activeSlot] + ' LOADED — LVL ' + save.level);
   } else {
@@ -2181,7 +2220,8 @@ function getSave(slot) {
   try { return JSON.parse(localStorage.getItem(SAVE_KEY + slot)); } catch(e) { return null; }
 }
 function setSave(slot, data) {
-  localStorage.setItem(SAVE_KEY + slot, JSON.stringify(data));
+  try { localStorage.setItem(SAVE_KEY + slot, JSON.stringify(data)); }
+  catch(e) { console.log('Save failed (storage full or blocked):', e.message); }
 }
 function deleteSave(slot) {
   localStorage.removeItem(SAVE_KEY + slot);
@@ -2195,7 +2235,7 @@ function renderSaveSlots() {
   for (let i = 0; i < 3; i++) {
     const save = getSave(i);
     const div = document.createElement('div');
-    div.className = 'save-slot' + (i === activeSlot ? ' active-slot' : '') + (save && save.completed ? ' completed-slot' : '');
+    div.className = 'save-slot' + (i === activeSlot ? ' active-slot' : '') + (save && save.completed ? ' completed-slot' : '') + (save && save.level===11 && !save.completed ? ' hacker-slot' : '');
     div.onclick = () => selectSlot(i);
 
     let inner = '<div class="slot-world">' + worldNames[i] + '</div>';
@@ -2206,8 +2246,11 @@ function renderSaveSlots() {
         inner += '<div class="slot-score">' + save.score.toLocaleString() + ' pts</div>';
         inner += '<div class="slot-info">' + date + '</div>';
       } else {
-        inner += '<div class="slot-score">' + save.score.toLocaleString() + ' pts</div>';
-        inner += '<div class="slot-info">LVL ' + save.level + ' &nbsp;·&nbsp; ' + date + '</div>';
+        const lvlLabel = save.level === 11 ? '<span style="color:#0f0;">⚡ HACKER</span>' : 'LVL ' + save.level;
+        inner += '<div class="slot-score">' + (save.score||0).toLocaleString() + ' pts</div>';
+        const livesStr = '♥'.repeat(Math.min(save.lives||0,5)) + (save.lives>5?' ×'+save.lives:'');
+        const bestStr = save.bestScore ? ' &nbsp;·&nbsp; best: ' + save.bestScore.toLocaleString() : '';
+        inner += '<div class="slot-info">' + lvlLabel + ' &nbsp;·&nbsp; ' + livesStr + bestStr + ' &nbsp;·&nbsp; ' + date + '</div>';
       }
       inner += '<div class="slot-del" onclick="event.stopPropagation();confirmDeleteSave(' + i + ')">✕</div>';
     } else {
@@ -2228,6 +2271,10 @@ function selectSlot(i) {
     btn.textContent = 'VIEW RESULTS';
     btn.style.borderColor = '#ffd700';
     btn.style.color = '#ffd700';
+  } else if (save && save.level === 11) {
+    btn.textContent = '⚡ ENTER HACKER';
+    btn.style.borderColor = '#00ff00';
+    btn.style.color = '#00ff00';
   } else if (save) {
     btn.textContent = 'CONTINUE';
     btn.style.borderColor = '';
@@ -2253,7 +2300,7 @@ function saveProgress(completed) {
   setSave(activeSlot, {
     level: state.level,
     score: state.score,
-    lives: state.lives,
+    lives: Math.max(state.lives, 1),
     date:  Date.now(),
     completed: completed || false
   });
@@ -2263,7 +2310,7 @@ function saveProgress(completed) {
 let autoSaveInterval = null;
 function startAutoSave() {
   clearInterval(autoSaveInterval);
-  autoSaveInterval = setInterval(() => { if(state && animId){ saveProgress(); showAutoSaveToast(); } }, 10000);
+  autoSaveInterval = setInterval(() => { if(state && animId && state.lives > 0){ const sv=getSave(activeSlot); if(sv&&sv.completed) return; saveProgress(); showAutoSaveToast(); } }, 10000);
 }
 
 // ─── EXIT MODAL ──────────────────────────────────────────────
