@@ -6,7 +6,7 @@ A neon-styled 2D platformer where you navigate a futuristic grid, stomp enemies,
 
 ## How to Play
 
-Open `platformer.html` in any modern browser. No install needed.
+Open `index.html` in any modern browser. No install needed.
 
 **Goal:** Collect every orb on a level to advance. Survive all 10 levels, then defeat the Overlord boss on Level 10.
 
