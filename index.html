@@ -281,6 +281,7 @@ const CONFIG = {
   SCORE_PER_BOSS_HIT: 50,
   SCORE_BOSS_KILL:    500,
   SCORE_LEVEL_CLEAR:  100,
+
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -627,7 +628,8 @@ function sfxStomp()      { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audi
 function sfxBossStomp()  { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(),sd=Audio.sfxGain; makeSlide('sawtooth',520,35,t,0.22,0.38,sd); makeNoise(t,0.16,0.18,sd,600); makeOsc('square',80,t+0.05,0.18,0.13,sd); }
 function sfxHit()        { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(),sd=Audio.sfxGain; makeSlide('sawtooth',440,55,t,0.55,0.32,sd); makeSlide('square',220,28,t+0.04,0.5,0.14,sd); makeNoise(t,0.35,0.15,sd,200); }
 function sfxProjectile() { if(!Audio.ctx||!Audio.sfxEnabled)return; makeSlide('sawtooth',950,180,Audio.now(),0.07,0.08,Audio.sfxGain); }
-function sfxLevelUp()    { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(),sd=Audio.sfxGain; [523,659,784,1046].forEach((f,i)=>makeOsc('sine',f,t+i*0.1,0.18,0.19,sd,0.01,0.08)); }
+function sfxLevelUp()       { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(),sd=Audio.sfxGain; [523,659,784,1046].forEach((f,i)=>makeOsc('sine',f,t+i*0.1,0.18,0.19,sd,0.01,0.08)); }
+
 function sfxVictory()    { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(); [523,659,784,1046,784,1046,1319].forEach((f,i)=>{ makeOsc('sine',f,t+i*0.13,0.22,0.22,Audio.masterGain,0.01,0.08); makeOsc('triangle',f*0.5,t+i*0.13,0.22,0.09,Audio.masterGain,0.01,0.08); }); }
 function sfxPowerup()    { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(); [523,659,784,1046,1318].forEach((f,i)=>makeOsc('sine',f,t+i*0.06,0.12,0.15,Audio.masterGain,0.005,0.05)); makeSlide('triangle',200,800,t,0.25,0.07,Audio.masterGain); }
 function sfxBossDeath()  { if(!Audio.ctx||!Audio.sfxEnabled)return; const t=Audio.now(); for(let i=0;i<5;i++){makeSlide('sawtooth',900-i*140,18,t+i*0.19,0.5,0.28,Audio.masterGain); makeNoise(t+i*0.19,0.28,0.18,Audio.masterGain,280+i*90);} makeOsc('sine',55,t+0.65,1.1,0.35,Audio.masterGain,0.1,0.45); }
@@ -851,7 +853,10 @@ function spawnBoss() {
     x:W/2-55, y:60, w:110, h:90,
     hp:CONFIG.BOSS_MAX_HP, maxHp:CONFIG.BOSS_MAX_HP,
     vx:1.2, floatTick:0, floatBase:50, floatAmp:20, floatSpeed:0.015,
-    shootTimer:0, shootInterval:140, stompCooldown:0,
+    // Attack timers
+    attackTimer:0, attackIndex:0, attackCooldown:0,
+    stompCooldown:0, chargeCooldown:0, chargeVx:0, charging:false,
+    laserTimer:0, laserActive:false, laserX:0, laserWarning:0,
     dead:false, deathTimer:0, rage:false, flash:0,
     projectiles:[], deathSfxPlayed:false,
   };
@@ -869,7 +874,11 @@ function spawnHackerBoss() {
     x:W/2-70, y:40, w:140, h:110,
     hp:20, maxHp:20,
     vx:3.5, floatTick:0, floatBase:35, floatAmp:25, floatSpeed:0.035,
-    shootTimer:0, shootInterval:45, stompCooldown:0,
+    // Attack timers
+    attackTimer:0, attackCooldown:0,
+    stompCooldown:0, chargeVx:0, charging:false, chargeCooldown:0,
+    teleportTimer:0, cloneTimer:0, clones:[],
+    wallBouncing:false,
     dead:false, deathTimer:0, rage:false, flash:0,
     projectiles:[], deathSfxPlayed:false, hackerUnlock:false,
   };
@@ -886,83 +895,289 @@ function updateBossHUD() {
   document.getElementById('boss-hp-text').textContent = Math.max(0, b.hp) + '/' + b.maxHp;
 }
 
+// ── Shared: kill a boss ──────────────────────────────────────────
+function killBoss(boss, s) {
+  const elapsed = s.bossStartTime ? (performance.now()-s.bossStartTime)/1000 : 999;
+  const hackerUnlocked = elapsed <= 10 && !s.hackerTriggered && s.level === 10;
+  boss.dead = true;
+  boss.deathTimer = hackerUnlocked ? 120 : 200;
+  boss.deathTimerMax = boss.deathTimer;
+  boss.hackerUnlock = hackerUnlocked;
+  boss.clones = [];
+  s.score += CONFIG.SCORE_BOSS_KILL; updateHUD();
+  document.getElementById('boss-hud').style.display = 'none';
+  Game.session.bossKills++;
+  if (hackerUnlocked) { s.hackerTriggered=true; Game.session.speedKills++; adminToast('⚡ SPEEDKILL! HACKER MODE UNLOCKED'); }
+  const cols = hackerUnlocked ? ['#0f0','#0ff','#fff'] : ['#f33','#f80','#ff0','#fff','#0ff'];
+  for (let i=0;i<8;i++) setTimeout(()=>{ if(Game.state&&Game.state.boss) spawnParticles(Game.state.boss.x+Math.random()*Game.state.boss.w, Game.state.boss.y+Math.random()*Game.state.boss.h, cols[Math.floor(Math.random()*cols.length)], 18); }, i*100);
+}
+
+// ── Shared: check stomp on boss ──────────────────────────────────
+function checkBossStompCollision(boss, p, s) {
+  if (boss.stompCooldown > 0 || p.invincible > 0) return;
+  if (!collides(p, boss)) return;
+  if (p.vy > 0 && p.y+p.h < boss.y+boss.h*0.38+10) {
+    boss.hp--; boss.flash=20; boss.stompCooldown=45;
+    p.vy = CONFIG.JUMP_FORCE * CONFIG.STOMP_BOUNCE;
+    s.score += CONFIG.SCORE_PER_BOSS_HIT;
+    spawnParticles(boss.x+boss.w/2, boss.y, '#fff', 16);
+    updateHUD(); updateBossHUD(); sfxBossStomp(); Game.session.stomps++;
+    if (boss.hp <= 0) killBoss(boss, s);
+  } else {
+    if (hasPowerup('shield')) { p.vy=CONFIG.JUMP_FORCE*0.5; p.invincible=60; spawnParticles(p.x+9,p.y,'#0ff',10); }
+    else loseLife();
+  }
+}
+
+// ── Shared: move projectiles and check hits ──────────────────────
+function tickProjectiles(boss, p) {
+  for (let i=boss.projectiles.length-1; i>=0; i--) {
+    const pr = boss.projectiles[i];
+    pr.x += pr.vx; pr.y += pr.vy;
+    if (pr.x<-30||pr.x>W+30||pr.y<-30||pr.y>H+30) { boss.projectiles.splice(i,1); continue; }
+    if (p.invincible===0) {
+      const dx=pr.x-(p.x+p.w/2), dy=pr.y-(p.y+p.h/2);
+      if (Math.sqrt(dx*dx+dy*dy) < pr.r+7) { boss.projectiles.splice(i,1); loseLife(); return; }
+    }
+  }
+}
+
+// ── THE OVERLORD — attack roster ─────────────────────────────────
+// Moves: aimed shot | spread shot | charge across screen | drop laser column
+function updateOverlord(boss, s, p) {
+  boss.floatTick += boss.floatSpeed;
+
+  // Rage transition
+  if (!boss.rage && boss.hp <= boss.maxHp/2) {
+    boss.rage=true; boss.floatSpeed*=1.6; boss.floatAmp=30;
+    spawnParticles(boss.x+boss.w/2, boss.y+boss.h/2, '#f80', 24);
+  }
+
+  if (boss.flash>0) boss.flash--;
+  if (boss.stompCooldown>0) boss.stompCooldown--;
+  if (boss.chargeCooldown>0) boss.chargeCooldown--;
+  if (boss.attackCooldown>0) { boss.attackCooldown--; }
+
+  // ── Charge move ──
+  if (boss.charging) {
+    boss.x += boss.chargeVx;
+    boss.y = boss.floatBase + Math.sin(boss.floatTick)*boss.floatAmp;
+    if (boss.x <= 0 || boss.x+boss.w >= W) {
+      boss.x = Math.max(0, Math.min(W-boss.w, boss.x));
+      boss.charging = false;
+      boss.chargeCooldown = boss.rage ? 180 : 260;
+      // Shockwave on wall hit
+      spawnParticles(boss.x + (boss.chargeVx>0?boss.w:0), boss.y+boss.h/2, '#f80', 14);
+      sfxStomp();
+    }
+  } else {
+    // Normal float drift toward player
+    const targetX = Math.max(10, Math.min(W-boss.w-10, p.x+p.w/2 - boss.w/2));
+    boss.x += (targetX - boss.x) * (boss.rage ? 0.012 : 0.007);
+    boss.y = boss.floatBase + Math.sin(boss.floatTick)*boss.floatAmp;
+  }
+
+  // ── Laser column warning + fire ──
+  if (boss.laserWarning > 0) {
+    boss.laserWarning--;
+    if (boss.laserWarning === 0) {
+      boss.laserActive = true;
+      boss.laserTimer = 40;
+      sfxProjectile();
+    }
+  }
+  if (boss.laserActive) {
+    boss.laserTimer--;
+    // Laser hits player
+    if (p.invincible===0 && Math.abs(p.x+p.w/2 - boss.laserX) < 18) {
+      if (hasPowerup('shield')) { p.invincible=60; spawnParticles(p.x+9,p.y,'#0ff',10); }
+      else loseLife(); return;
+    }
+    if (boss.laserTimer <= 0) boss.laserActive = false;
+  }
+
+  // ── Attack cycle ──
+  if (boss.attackCooldown === 0 && !boss.charging) {
+    const roll = Math.floor(Math.random() * (boss.rage ? 4 : 3));
+    if (roll === 0) {
+      // Aimed shot
+      fireAtPlayer(boss, 1, boss.rage ? 3.8 : 2.8);
+      sfxProjectile();
+      boss.attackCooldown = boss.rage ? 55 : 90;
+    } else if (roll === 1) {
+      // Spread burst — 5 shots in a fan
+      const cx=boss.x+boss.w/2, cy=boss.y+boss.h*0.65;
+      const dx=(p.x+p.w/2)-cx, dy=(p.y+p.h/2)-cy;
+      const baseAng = Math.atan2(dy,dx);
+      const spd = boss.rage ? 3.2 : 2.2;
+      for (let i=-2;i<=2;i++) {
+        const a = baseAng + i*0.22;
+        boss.projectiles.push({x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:4,type:'normal'});
+      }
+      sfxProjectile();
+      boss.attackCooldown = boss.rage ? 80 : 130;
+    } else if (roll === 2) {
+      // Charge across screen
+      if (boss.chargeCooldown === 0) {
+        boss.charging = true;
+        boss.chargeVx = (p.x > boss.x+boss.w/2 ? 1 : -1) * (boss.rage ? 9 : 6);
+        boss.attackCooldown = boss.rage ? 100 : 160;
+      } else {
+        boss.attackCooldown = 30;
+      }
+    } else if (roll === 3 && !boss.laserActive && boss.laserWarning===0) {
+      // Laser drop — warn first, then fire column
+      boss.laserX = p.x + p.w/2;
+      boss.laserWarning = 50; // 50 frames to dodge
+      boss.attackCooldown = boss.rage ? 90 : 150;
+    } else {
+      boss.attackCooldown = 30;
+    }
+  }
+
+  tickProjectiles(boss, p);
+  checkBossStompCollision(boss, p, s);
+}
+
+// ── THE HACKER CORE — attack roster ──────────────────────────────
+// Moves: aimed burst | ring shot | teleport | wall bounce | clone decoys
+function updateHackerCore(boss, s, p) {
+  boss.floatTick += boss.floatSpeed;
+
+  if (!boss.rage && boss.hp <= boss.maxHp/2) {
+    boss.rage=true; boss.floatSpeed*=1.8; boss.vx*=1.5;
+    boss.cloneTimer=0;
+    spawnParticles(boss.x+boss.w/2, boss.y+boss.h/2, '#0f0', 28);
+  }
+
+  if (boss.flash>0) boss.flash--;
+  if (boss.stompCooldown>0) boss.stompCooldown--;
+  if (boss.chargeCooldown>0) boss.chargeCooldown--;
+  if (boss.attackCooldown>0) boss.attackCooldown--;
+
+  // ── Wall bounce mode (rage) ──
+  if (boss.wallBouncing) {
+    boss.x += boss.vx;
+    boss.y = boss.floatBase + Math.sin(boss.floatTick)*boss.floatAmp;
+    if (boss.x<=10||boss.x+boss.w>=W-10) {
+      boss.vx*=-1; boss.x=Math.max(10,Math.min(W-boss.w-10,boss.x));
+      // Fire ring on each wall bounce
+      fireRing(boss, 8, 3.5);
+      sfxProjectile();
+    }
+  } else {
+    boss.x += boss.vx;
+    boss.y = boss.floatBase + Math.sin(boss.floatTick)*boss.floatAmp;
+    if (boss.x<=10||boss.x+boss.w>=W-10) boss.vx*=-1;
+  }
+
+  // ── Clone decoys (rage) ──
+  if (boss.rage) {
+    boss.cloneTimer = (boss.cloneTimer||0) + 1;
+    if (boss.cloneTimer > 200) {
+      boss.cloneTimer = 0;
+      // Add up to 2 clones that mirror boss movement
+      boss.clones = [{x:boss.x-180, y:boss.y, offset:-180}, {x:boss.x+180, y:boss.y, offset:180}]
+        .filter(c => c.x>0 && c.x+boss.w<W);
+    }
+    boss.clones.forEach(c => { c.x=boss.x+c.offset; c.y=boss.y; });
+    // Clones fire too
+    if (boss.cloneTimer % 70 === 0) {
+      boss.clones.forEach(c => {
+        const cx=c.x+boss.w/2, cy=c.y+boss.h/2;
+        const dx=(p.x+p.w/2)-cx, dy=(p.y+p.h/2)-cy, d=Math.sqrt(dx*dx+dy*dy)||1;
+        boss.projectiles.push({x:cx,y:cy,vx:dx/d*2.5,vy:dy/d*2.5,r:4,clone:true});
+      });
+    }
+    // Check clone body collision
+    boss.clones.forEach(c => {
+      if (p.invincible===0 && collides(p, {...c,w:boss.w,h:boss.h})) {
+        if (p.vy>0 && p.y+p.h < c.y+boss.h*0.38+10) {
+          // Stomping a clone destroys it and bounces player
+          boss.clones = boss.clones.filter(cl=>cl!==c);
+          p.vy=CONFIG.JUMP_FORCE*0.7;
+          sfxStomp();
+        } else {
+          if (hasPowerup('shield')) { p.invincible=60; } else loseLife();
+        }
+      }
+    });
+  }
+
+  // ── Attack cycle ──
+  if (boss.attackCooldown === 0) {
+    const roll = Math.floor(Math.random() * (boss.rage ? 4 : 3));
+    if (roll === 0) {
+      // Rapid triple burst
+      for (let i=0;i<3;i++) {
+        setTimeout(()=>{ if(Game.state&&Game.state.boss&&!Game.state.boss.dead) { fireAtPlayer(Game.state.boss,1,boss.rage?4.5:3.2); sfxProjectile(); } }, i*80);
+      }
+      boss.attackCooldown = boss.rage ? 50 : 80;
+    } else if (roll === 1) {
+      // Full ring of bullets
+      fireRing(boss, boss.rage?12:8, boss.rage?3.8:2.8);
+      sfxProjectile();
+      boss.attackCooldown = boss.rage ? 70 : 110;
+    } else if (roll === 2) {
+      // Teleport to opposite side of player + instant shot
+      const newX = p.x < W/2 ? W*0.72 : W*0.12;
+      boss.x = newX; boss.vx *= -1;
+      spawnParticles(boss.x+boss.w/2, boss.y+boss.h/2, '#0f0', 16);
+      setTimeout(()=>{ if(Game.state&&Game.state.boss&&!Game.state.boss.dead) { fireAtPlayer(Game.state.boss,3,3.5); sfxProjectile(); } }, 80);
+      boss.attackCooldown = boss.rage ? 65 : 100;
+    } else if (roll === 3) {
+      // Enter wall bounce mode briefly
+      boss.wallBouncing = true;
+      boss.vx = boss.rage ? 9 : 6;
+      setTimeout(()=>{ if(Game.state&&Game.state.boss) boss.wallBouncing=false; }, boss.rage?2500:3500);
+      boss.attackCooldown = boss.rage ? 120 : 180;
+    } else {
+      boss.attackCooldown = 30;
+    }
+  }
+
+  tickProjectiles(boss, p);
+  checkBossStompCollision(boss, p, s);
+}
+
+// ── Fire N shots aimed at player ────────────────────────────────
+function fireAtPlayer(boss, count, spd) {
+  const cx=boss.x+boss.w/2, cy=boss.y+boss.h*0.6;
+  const p=Game.state.player;
+  const dx=(p.x+p.w/2)-cx, dy=(p.y+p.h/2)-cy, d=Math.sqrt(dx*dx+dy*dy)||1;
+  for (let i=0; i<count; i++) {
+    const spread = (i-(count-1)/2)*0.15;
+    const a = Math.atan2(dy,dx)+spread;
+    boss.projectiles.push({x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:boss.rage?5:4});
+  }
+}
+
+// ── Fire a full ring of bullets ──────────────────────────────────
+function fireRing(boss, count, spd) {
+  const cx=boss.x+boss.w/2, cy=boss.y+boss.h*0.6;
+  for (let i=0; i<count; i++) {
+    const a=(Math.PI*2/count)*i;
+    boss.projectiles.push({x:cx,y:cy,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,r:4});
+  }
+}
+
+// ── Main boss update dispatcher ──────────────────────────────────
 function updateBoss() {
-  const s = Game.state, boss = s.boss;
+  const s=Game.state, boss=s.boss;
   if (!boss) return;
   if (boss.dead) {
     boss.deathTimer--;
-    if (!boss.deathSfxPlayed) { boss.deathSfxPlayed = true; sfxBossDeath(); }
-    if (boss.deathTimer <= 0) {
+    if (!boss.deathSfxPlayed) { boss.deathSfxPlayed=true; sfxBossDeath(); }
+    if (boss.deathTimer<=0) {
       if (boss.hackerUnlock) triggerHackerLevel();
       else if (isHackerLevel()) showHackerVictory();
       else showVictory();
     }
     return;
   }
-  boss.floatTick += boss.floatSpeed;
-  boss.y = boss.floatBase + Math.sin(boss.floatTick) * boss.floatAmp;
-  boss.x += boss.vx;
-  if (boss.x <= 10 || boss.x+boss.w >= W-10) boss.vx *= -1;
-  if (boss.flash > 0) boss.flash--;
-  if (boss.stompCooldown > 0) boss.stompCooldown--;
-  if (!boss.rage && boss.hp <= boss.maxHp/2) {
-    boss.rage = true; boss.shootInterval = 90; boss.vx *= 1.3;
-    spawnParticles(boss.x+boss.w/2, boss.y+boss.h/2, '#f80', 22);
-  }
-  boss.shootTimer++;
-  if (boss.shootTimer >= boss.shootInterval) {
-    boss.shootTimer = 0; shootAtPlayer(boss); sfxProjectile();
-  }
-  const p = s.player;
-  for (let i = boss.projectiles.length-1; i >= 0; i--) {
-    const pr = boss.projectiles[i];
-    pr.x += pr.vx; pr.y += pr.vy;
-    if (pr.x < -20 || pr.x > W+20 || pr.y < -20 || pr.y > H+20) { boss.projectiles.splice(i,1); continue; }
-    if (p.invincible === 0) {
-      const dx = pr.x-(p.x+p.w/2), dy = pr.y-(p.y+p.h/2);
-      if (Math.sqrt(dx*dx+dy*dy) < pr.r+7) { boss.projectiles.splice(i,1); loseLife(); }
-    }
-  }
-  if (boss.stompCooldown === 0 && p.invincible === 0) {
-    if (collides(p, boss)) {
-      if (p.vy > 0 && p.y+p.h < boss.y+boss.h*0.38+10) {
-        boss.hp--; boss.flash = 20; boss.stompCooldown = 45;
-        p.vy = CONFIG.JUMP_FORCE * CONFIG.STOMP_BOUNCE;
-        s.score += CONFIG.SCORE_PER_BOSS_HIT;
-        spawnParticles(boss.x+boss.w/2, boss.y, '#fff', 16);
-        updateHUD(); updateBossHUD(); sfxBossStomp(); Game.session.stomps++;
-        if (boss.hp <= 0) {
-          const elapsed = (performance.now()-s.bossStartTime)/1000;
-          const hackerUnlocked = elapsed <= 10 && !s.hackerTriggered && s.level === 10;
-          boss.dead = true;
-          boss.deathTimer = hackerUnlocked ? 120 : 200;
-          boss.deathTimerMax = boss.deathTimer;
-          boss.hackerUnlock = hackerUnlocked;
-          s.score += CONFIG.SCORE_BOSS_KILL; updateHUD();
-          document.getElementById('boss-hud').style.display = 'none';
-          Game.session.bossKills++;
-          if (hackerUnlocked) { s.hackerTriggered = true; Game.session.speedKills++; adminToast('⚡ SPEEDKILL! HACKER MODE UNLOCKED'); }
-          for (let i=0;i<6;i++) setTimeout(()=>{ if(Game.state&&Game.state.boss) spawnParticles(Game.state.boss.x+Math.random()*Game.state.boss.w, Game.state.boss.y+Math.random()*Game.state.boss.h, (hackerUnlocked?['#0f0','#0ff','#fff']:['#f33','#f80','#ff0','#fff','#0ff'])[Math.floor(Math.random()*5)], 18); }, i*130);
-        }
-      } else {
-        if (hasPowerup('shield')) { p.vy = CONFIG.JUMP_FORCE*0.5; p.invincible=60; spawnParticles(p.x+9,p.y,'#0ff',10); }
-        else loseLife();
-      }
-    }
-  }
-}
-
-function shootAtPlayer(boss) {
-  const p  = Game.state.player;
-  const cx = boss.x+boss.w/2, cy = boss.y+boss.h*0.6;
-  const dx = (p.x+p.w/2)-cx, dy = (p.y+p.h/2)-cy;
-  const dist = Math.sqrt(dx*dx+dy*dy) || 1;
-  const spd  = boss.rage ? 3.5 : 2.4;
-  boss.projectiles.push({x:cx, y:cy, vx:dx/dist*spd, vy:dy/dist*spd, r:boss.rage?5:4});
-  if (boss.rage) {
-    const ang = Math.atan2(dy, dx);
-    for (const a of [ang-0.5, ang+0.5]) boss.projectiles.push({x:cx, y:cy, vx:Math.cos(a)*spd*0.7, vy:Math.sin(a)*spd*0.7, r:4});
-  }
+  const p=s.player;
+  if (isHackerLevel()) updateHackerCore(boss, s, p);
+  else                 updateOverlord(boss, s, p);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1542,10 +1757,56 @@ function drawBoss() {
     ctx.shadowBlur=0; ctx.textAlign='left'; ctx.globalAlpha=1;
   }
 
+  // ── Overlord laser warning ───────────────────────────────────
+  if (!isHackerLevel() && (boss.laserWarning > 0 || boss.laserActive)) {
+    const lx = boss.laserX;
+    if (boss.laserWarning > 0) {
+      // Flickering red warning column
+      const alpha = Math.sin(boss.laserWarning * 0.35) * 0.5 + 0.3;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#ff0000';
+      ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 12;
+      ctx.fillRect(lx-16, 0, 32, H);
+      // Warning chevrons
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace'; ctx.textAlign='center';
+      for (let y=20; y<H; y+=60) ctx.fillText('▼', lx, y);
+      ctx.textAlign='left'; ctx.globalAlpha=1; ctx.shadowBlur=0;
+    }
+    if (boss.laserActive) {
+      // Actual laser beam
+      const prog = boss.laserTimer / 40;
+      ctx.globalAlpha = prog;
+      ctx.strokeStyle = '#ff0000'; ctx.lineWidth = 28; ctx.shadowColor='#ff0000'; ctx.shadowBlur=30;
+      ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx, H); ctx.stroke();
+      ctx.strokeStyle='#fff'; ctx.lineWidth=6; ctx.shadowBlur=0;
+      ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx,H); ctx.stroke();
+      ctx.globalAlpha=1;
+    }
+  }
+
+  // ── Hacker Core clones ───────────────────────────────────────
+  if (isHackerLevel() && boss.clones && boss.clones.length) {
+    boss.clones.forEach(c => {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + Math.sin(Game.state.tick*0.15)*0.15;
+      ctx.shadowColor='#00ff00'; ctx.shadowBlur=20;
+      ctx.strokeStyle='#00ff00'; ctx.lineWidth=2;
+      ctx.fillStyle='rgba(0,20,0,0.7)';
+      ctx.beginPath(); ctx.roundRect(c.x, c.y, boss.w, boss.h, 4); ctx.fill(); ctx.stroke();
+      // Glitchy eye on clone
+      const ecx=c.x+boss.w/2, ecy=c.y+boss.h/2;
+      ctx.fillStyle='#00ff00'; ctx.globalAlpha=0.7;
+      ctx.beginPath(); ctx.arc(ecx,ecy,10,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(ecx,ecy,5,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    });
+  }
+
   // ── Projectiles ─────────────────────────────────────────────
   const pCol = isHackerLevel() ? '#00ff88' : (boss.rage ? '#ff6600' : '#ff00aa');
   boss.projectiles.forEach(pr => {
-    ctx.shadowColor=pCol; ctx.shadowBlur=14; ctx.fillStyle=pCol;
+    const col = pr.clone ? 'rgba(0,255,100,0.7)' : pCol;
+    ctx.shadowColor=col; ctx.shadowBlur=14; ctx.fillStyle=col;
     ctx.beginPath(); ctx.arc(pr.x,pr.y,pr.r,0,Math.PI*2); ctx.fill();
     ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.lineWidth=1; ctx.stroke();
     ctx.shadowBlur=0;
